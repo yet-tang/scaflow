@@ -7,6 +7,10 @@
   "engines": {
     "node": ">=22"
   },
+  "bin": {
+    "scaflow-dev": "./scripts/scaflow-dev.mjs",
+    "scaflow-audit": "./scripts/scaflow-audit.mjs"
+  },
   "devDependencies": {
     "@types/node": "^22.15.32",
     "typescript": "^5.8.3",
@@ -16,6 +20,8 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "lint": "pnpm -r lint"
+    "lint": "pnpm -r lint",
+    "scaflow-dev": "node scripts/scaflow-dev.mjs",
+    "scaflow-audit": "node scripts/scaflow-audit.mjs"
   }
 }
