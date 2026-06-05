@@ -18,6 +18,26 @@
 - Commands executed by the Engine must use structured executable/args definitions; arbitrary shell strings are not the default.
 - `.scaflow/` must not contain application source checkouts.
 
+## Task development
+
+For implementation work, use the `scaflow-developer` custom Agent and the `scaflow-development` Skill when available.
+
+Developers must read:
+
+- `docs/exec-plans/scaflow-v0.1.0.md`
+- `docs/development/scaflow-development-workflow.md`
+- the relevant Task Contract and plan
+
+Development requirements:
+
+- Implement exactly one approved Task Contract at a time.
+- Preflight dependency state, Git status, scopes, paths, dependency policy, acceptance criteria, and verification commands before editing.
+- Do not overwrite or absorb unrelated pre-existing changes.
+- Do not modify requirements, policies, or contracts to make implementation pass.
+- Run the complete Task Contract gate and perform developer self-review.
+- Default to no commit, no push, and no PR unless the user explicitly requests them.
+- Hand completed implementation to the independent Auditor.
+
 ## Independent audit
 
 For implementation audits, use the `scaflow-auditor` custom Agent and the `scaflow-audit` Skill when available.
