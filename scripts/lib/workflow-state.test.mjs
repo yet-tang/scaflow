@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -123,4 +123,43 @@ test("implementation fingerprint covers tracked and untracked changes", () => {
   writeFileSync(join(root, "untracked.txt"), "new\n", "utf8");
   const untrackedFingerprint = implementationFingerprint(root, baseCommit);
   assert.notEqual(untrackedFingerprint, trackedFingerprint);
+});
+
+test("fingerprint is stable when new files move from untracked to committed", () => {
+  const root = mkdtempSync(join(tmpdir(), "scaflow-git-"));
+  git(root, ["init", "-b", "main"]);
+  git(root, ["config", "user.email", "test@example.com"]);
+  git(root, ["config", "user.name", "Scaflow Test"]);
+  writeFileSync(join(root, "base.txt"), "base\n", "utf8");
+  git(root, ["add", "base.txt"]);
+  git(root, ["commit", "-m", "base"]);
+  const baseCommit = git(root, ["rev-parse", "HEAD"]);
+
+  writeFileSync(join(root, "new.txt"), "new\n", "utf8");
+  const beforeCommit = implementationFingerprint(root, baseCommit);
+  git(root, ["add", "new.txt"]);
+  git(root, ["commit", "-m", "add new file"]);
+  const afterCommit = implementationFingerprint(root, baseCommit);
+
+  assert.equal(afterCommit, beforeCommit);
+});
+
+test("fingerprint is stable when deletions move from working tree to committed", () => {
+  const root = mkdtempSync(join(tmpdir(), "scaflow-git-"));
+  git(root, ["init", "-b", "main"]);
+  git(root, ["config", "user.email", "test@example.com"]);
+  git(root, ["config", "user.name", "Scaflow Test"]);
+  writeFileSync(join(root, "keep.txt"), "keep\n", "utf8");
+  writeFileSync(join(root, "remove.txt"), "remove\n", "utf8");
+  git(root, ["add", "keep.txt", "remove.txt"]);
+  git(root, ["commit", "-m", "base"]);
+  const baseCommit = git(root, ["rev-parse", "HEAD"]);
+
+  unlinkSync(join(root, "remove.txt"));
+  const beforeCommit = implementationFingerprint(root, baseCommit);
+  git(root, ["add", "-u"]);
+  git(root, ["commit", "-m", "remove file"]);
+  const afterCommit = implementationFingerprint(root, baseCommit);
+
+  assert.equal(afterCommit, beforeCommit);
 });
