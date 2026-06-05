@@ -9,7 +9,6 @@ import {
   implementationFingerprint,
   implementationHasChanges,
   parseAuditVerdict,
-  patchWorkflowState,
   readWorkflowState,
   resolveGitRef,
   transitionWorkflowState,
@@ -132,27 +131,36 @@ if (!implementationHasChanges(root, baseCommit)) {
 const currentFingerprint = implementationFingerprint(root, baseCommit);
 const legacyImportNeeded = !loaded.exists || loaded.state.workflowState === "ready";
 const effectiveState = legacyImportNeeded ? "ready_for_audit" : loaded.state.workflowState;
-const allowedStates = new Set(["ready_for_audit", "audit_failed", "audit_invalid"]);
+const allowedStates = new Set(["ready_for_audit", "audit_failed"]);
 if (!allowedStates.has(effectiveState)) {
   fail(`audit is not allowed from workflow state ${loaded.state.workflowState}`);
 }
 
 if (!legacyImportNeeded && loaded.state.implementationFingerprint && loaded.state.implementationFingerprint !== currentFingerprint) {
-  patchWorkflowState({
-    root,
-    taskId: options.taskId,
-    defaults,
-    event: "IMPLEMENTATION_CHANGED_BEFORE_AUDIT",
-    patch: {
-      development: {
-        lastError: "implementation changed after developer handoff",
+  if (!options.dryRun) {
+    transitionWorkflowState({
+      root,
+      taskId: options.taskId,
+      defaults,
+      to: "audit_invalid",
+      event: "IMPLEMENTATION_CHANGED_BEFORE_AUDIT",
+      patch: {
+        implementationFingerprint: currentFingerprint,
+        approvedFingerprint: null,
+        development: {
+          lastError: "implementation changed after developer handoff",
+        },
+        audit: {
+          verdict: null,
+          lastError: "developer handoff fingerprint no longer matches the implementation",
+        },
       },
-    },
-    metadata: {
-      expected: loaded.state.implementationFingerprint,
-      actual: currentFingerprint,
-    },
-  });
+      metadata: {
+        expected: loaded.state.implementationFingerprint,
+        actual: currentFingerprint,
+      },
+    });
+  }
   fail(`implementation changed after developer handoff; run pnpm scaflow-dev ${options.taskId} --base ${options.baseRef} --resume`);
 }
 
@@ -301,7 +309,7 @@ if (!stableImplementation) {
     },
     metadata: { round, startedFingerprint: currentFingerprint, finishedFingerprint: afterFingerprint },
   });
-  fail(`implementation changed during audit; round ${round} is invalid and must be repeated`);
+  fail(`implementation changed during audit; run pnpm scaflow-dev ${options.taskId} --base ${options.baseRef} --resume`);
 }
 
 if (!existsSync(reportPath) || readFileSync(reportPath, "utf8").trim().length === 0) {
