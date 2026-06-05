@@ -2,7 +2,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import process from "node:process";
 
 function fail(message, code = 1) {
@@ -72,6 +72,12 @@ function ensureCodex() {
   if (result.status !== 0) fail("Codex CLI is not installed or not available in PATH");
 }
 
+function ensureBaseRef(baseRef) {
+  const result = run("git", ["rev-parse", "--verify", `${baseRef}^{commit}`], { capture: true });
+  if (result.status !== 0) fail(`base ref does not resolve to a commit: ${baseRef}`);
+  return result.stdout.trim();
+}
+
 function ensureTask(taskId) {
   const contractPath = join("tasks", taskId, "contract.yaml");
   if (!existsSync(contractPath)) fail(`Task Contract not found: ${contractPath}`);
@@ -92,13 +98,14 @@ function ensureBranch(taskId) {
   return branch;
 }
 
-function buildPrompt({ taskId, baseRef, contractPath, reportPath, resume }) {
-  return `Use the scaflow-developer custom agent and the scaflow-development Skill.\n\nImplement exactly ${taskId}.\n\nInputs:\n- Task Contract: ${contractPath}\n- Base ref: ${baseRef}\n- Current branch and working tree are the implementation target.\n- Developer report path: ${reportPath}\n\nMandatory behavior:\n1. Perform the full preflight from docs/development/scaflow-development-workflow.md before editing.\n2. Verify dependency completion, current Git status, scopes, allowed_paths, forbidden_paths, dependency_changes, acceptance criteria, and verification commands.\n3. Preserve unrelated pre-existing changes and stop if they overlap this task.\n4. Implement only ${taskId}; do not implement future tasks.\n5. Run every verification command from the Task Contract, then git diff --check and git status --short.\n6. Perform developer self-review against the actual diff.\n7. Write the final developer report to ${reportPath}.\n8. Stop when ready for independent audit.\n9. Do not commit, push, create a pull request, or mark the shared Task completed.\n${resume ? "10. This is a repair/resume round. Inspect prior audit reports under the handoff directory and fix only current findings.\n" : ""}`;
+function buildPrompt({ taskId, baseRef, baseCommit, contractPath, reportPath, resume }) {
+  return `Use the scaflow-developer custom agent and the scaflow-development Skill.\n\nImplement exactly ${taskId}.\n\nInputs:\n- Task Contract: ${contractPath}\n- Base ref: ${baseRef}\n- Resolved base commit: ${baseCommit}\n- Current branch and working tree are the implementation target.\n- Developer report path: ${reportPath}\n\nMandatory behavior:\n1. Perform the full preflight from docs/development/scaflow-development-workflow.md before editing.\n2. Verify dependency completion, current Git status, scopes, allowed_paths, forbidden_paths, dependency_changes, acceptance criteria, and verification commands.\n3. Preserve unrelated pre-existing changes and stop if they overlap this task.\n4. Implement only ${taskId}; do not implement future tasks.\n5. Run every verification command from the Task Contract, then git diff --check and git status --short.\n6. Perform developer self-review against the actual diff.\n7. Write the final developer report to ${reportPath}.\n8. Stop when ready for independent audit.\n9. Do not commit, push, create a pull request, or mark the shared Task completed.\n${resume ? "10. This is a repair/resume round. Inspect prior audit reports under the handoff directory and fix only current findings.\n" : ""}`;
 }
 
 const options = parseArgs(process.argv.slice(2));
 const root = ensureRepositoryRoot();
 ensureCodex();
+const baseCommit = ensureBaseRef(options.baseRef);
 const contractPath = ensureTask(options.taskId);
 const branch = ensureBranch(options.taskId);
 
@@ -109,6 +116,7 @@ const metadataPath = join(handoffDir, "handoff.json");
 const metadata = {
   taskId: options.taskId,
   baseRef: options.baseRef,
+  baseCommit,
   branch,
   mode: options.resume ? "resume" : "initial",
   startedAt: new Date().toISOString(),
@@ -119,6 +127,7 @@ writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
 const prompt = buildPrompt({
   taskId: options.taskId,
   baseRef: options.baseRef,
+  baseCommit,
   contractPath,
   reportPath,
   resume: options.resume,
@@ -126,7 +135,7 @@ const prompt = buildPrompt({
 
 console.log(`[scaflow-dev] task: ${options.taskId}`);
 console.log(`[scaflow-dev] branch: ${branch}`);
-console.log(`[scaflow-dev] base: ${options.baseRef}`);
+console.log(`[scaflow-dev] base: ${options.baseRef} (${baseCommit.slice(0, 12)})`);
 console.log(`[scaflow-dev] report: ${reportPath}`);
 
 if (options.dryRun) {
