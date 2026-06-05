@@ -26,6 +26,7 @@ Developers must read:
 
 - `docs/exec-plans/scaflow-v0.1.0.md`
 - `docs/development/scaflow-development-workflow.md`
+- `docs/development/bootstrap-workflow-state-machine.md`
 - the relevant Task Contract and plan
 
 Development requirements:
@@ -37,6 +38,16 @@ Development requirements:
 - Run the complete Task Contract gate and perform developer self-review.
 - Default to no commit, no push, and no PR unless the user explicitly requests them.
 - Hand completed implementation to the independent Auditor.
+- Use `scaflow-status` to inspect the bootstrap workflow state and record verified delivery transitions.
+
+## Bootstrap workflow semantics
+
+- Development completion means `ready_for_audit`, not Task completion.
+- Audit approval means `approved` or `approved_with_follow_ups`.
+- Local delivery completion means `merged`.
+- The shared Task Contract may become `definition_state: completed` only after merge and through a separate controlled change.
+- Do not bypass legal transitions in `.scaflow/handoffs/<task-id>/state.json`.
+- Do not edit `state.json` or `events.jsonl` manually.
 
 ## Independent audit
 
