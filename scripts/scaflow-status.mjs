@@ -122,9 +122,9 @@ function markState(root, taskId, loaded, mark, mergeBaseRef) {
     baseCommit: state.baseCommit,
     branch: state.branch,
   };
-  verifyBranch(root, state.branch);
 
   if (mark === "committed") {
+    verifyBranch(root, state.branch);
     const { commit, fingerprint } = verifyCommitReady(root, state);
     return transitionWorkflowState({
       root,
@@ -145,6 +145,7 @@ function markState(root, taskId, loaded, mark, mergeBaseRef) {
   }
 
   if (mark === "pushed") {
+    verifyBranch(root, state.branch);
     if (state.workflowState !== "committed") {
       fail(`cannot mark pushed from workflow state ${state.workflowState}`);
     }
@@ -191,7 +192,11 @@ function markState(root, taskId, loaded, mark, mergeBaseRef) {
           mergedAt: new Date().toISOString(),
         },
       },
-      metadata: { commit: state.delivery.commit, baseRef },
+      metadata: {
+        commit: state.delivery.commit,
+        baseRef,
+        observedFromBranch: currentBranch(root),
+      },
     }).state;
   }
 
