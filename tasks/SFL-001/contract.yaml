@@ -13,6 +13,7 @@ source_requirements:
   - id: NFR-005
     document: docs/source/scaflow-v0.1.0-prd.md
 dependencies: []
+dependency_changes: allowed
 repositories:
   primary: "@control"
   scopes:
@@ -20,6 +21,7 @@ repositories:
       access: read-write
       allowed_paths:
         - package.json
+        - pnpm-lock.yaml
         - pnpm-workspace.yaml
         - tsconfig*.json
         - vitest.config.*
@@ -37,13 +39,15 @@ repositories:
         - .scaflow/**
 acceptance_criteria:
   - id: SFL-001-AC-01
-    description: Root and workspace packages are named consistently with the approved @scaflow/* internal scope.
+    description: Root package is named @scaflow/root, is private, and workspace packages use the approved @scaflow/* internal scope.
   - id: SFL-001-AC-02
     description: pnpm install, pnpm typecheck, and pnpm test can run successfully.
   - id: SFL-001-AC-03
     description: Every workspace package is visible to pnpm and has one executable smoke test.
   - id: SFL-001-AC-04
     description: No Git, SQLite, Workspace, Codex, Verification, ChangeSet, or CLI business behavior is implemented.
+  - id: SFL-001-AC-05
+    description: pnpm-lock.yaml may be created or updated only as a result of installing foundation dev dependencies.
 verification:
   commands:
     - repository: "@control"

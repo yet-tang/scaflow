@@ -12,6 +12,7 @@ source_requirements:
     document: docs/source/scaflow-v0.1.0-prd.md
 dependencies:
   - SFL-027
+dependency_changes: forbidden
 repositories:
   primary: "@control"
   scopes:
@@ -50,6 +51,11 @@ verification:
       executable: pnpm
       args: ["typecheck"]
       timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["test"]
+      timeout_seconds: 900
       required: true
 retry_policy:
   max_attempts: 2

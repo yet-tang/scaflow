@@ -1,20 +1,23 @@
 version: 1
 task:
-  id: SFL-026
-  title: Repair Loop
+  id: SFL-033
+  title: Agent Runtime Sandbox Enforcement
   type: runtime
   risk_level: R3
   definition_state: ready
 objective:
-  summary: Implement verification failure summaries, continue session behavior, repair limits, and blocked or failed state decisions.
+  summary: Enforce runtime sandbox policy consistently for SDK and exec adapters, including working directory, writable roots, environment cleaning, network defaults, and forbidden host resources.
 source_requirements:
-  - id: FR-014
+  - id: SEC-001
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: SEC-002
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: SEC-004
     document: docs/source/scaflow-v0.1.0-prd.md
 dependencies:
-  - SFL-019
-  - SFL-022
-  - SFL-024
-  - SFL-025
+  - SFL-020
+  - SFL-023
+  - SFL-032
 dependency_changes: forbidden
 repositories:
   primary: "@control"
@@ -22,28 +25,30 @@ repositories:
     - repository: "@control"
       access: read-write
       allowed_paths:
-        - packages/core/**
         - packages/codex-runtime/**
+        - packages/config/**
+        - packages/core/**
         - packages/verification/**
-        - packages/state/**
-        - apps/cli/**
+        - packages/testkit/**
         - fixtures/**
       forbidden_paths:
         - docs/source/scaflow-v0.1.0-prd.md
         - workspace/repos/**
         - .scaflow/state.db
 acceptance_criteria:
-  - id: SFL-026-AC-01
-    description: Default retry policy uses max_attempts 2, max_repair_rounds_per_attempt 3, and escalate_after_same_failure 2.
-  - id: SFL-026-AC-02
-    description: Non-repairable failures are not sent back to Agent and transition to blocked or failed.
-  - id: SFL-026-AC-03
-    description: Repair loop continues the same session when recoverable and re-runs verification after repair.
+  - id: SFL-033-AC-01
+    description: SDK and exec adapters use the same sandbox policy with TaskRun Bundle as the fixed working directory.
+  - id: SFL-033-AC-02
+    description: Runtime only exposes declared writable roots and does not pass host secrets, SSH keys, cloud credentials, Docker socket, user home, .scaflow/state.db, engine source, or other TaskRuns.
+  - id: SFL-033-AC-03
+    description: Agent command network is disabled by default unless allowed by policy.
+  - id: SFL-033-AC-04
+    description: Security violations terminate the TaskRun and record non-repairable evidence.
 verification:
   commands:
     - repository: "@control"
       executable: pnpm
-      args: ["--filter", "@scaflow/core", "test"]
+      args: ["--filter", "@scaflow/codex-runtime", "test"]
       timeout_seconds: 300
       required: true
     - repository: "@control"

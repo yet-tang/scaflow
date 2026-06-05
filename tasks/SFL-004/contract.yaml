@@ -10,17 +10,20 @@ objective:
 source_requirements:
   - id: FR-004
     document: docs/source/scaflow-v0.1.0-prd.md
-  - id: section-12
-    document: docs/source/scaflow-v0.1.0-prd.md
+source_references:
+  - document: docs/source/scaflow-v0.1.0-prd.md
+    section: "12. CLI 范围"
 dependencies:
   - SFL-002
   - SFL-003
+dependency_changes: allowed
 repositories:
   primary: "@control"
   scopes:
     - repository: "@control"
       access: read-write
       allowed_paths:
+        - pnpm-lock.yaml
         - apps/cli/**
         - packages/core/**
       forbidden_paths:
@@ -45,6 +48,11 @@ verification:
       executable: pnpm
       args: ["typecheck"]
       timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["test"]
+      timeout_seconds: 900
       required: true
 retry_policy:
   max_attempts: 2

@@ -8,12 +8,14 @@ task:
 objective:
   summary: Define Task, TaskRun, and ChangeSet states, legal transitions, and state authority rules.
 source_requirements:
-  - id: section-7
-    document: docs/source/scaflow-v0.1.0-prd.md
   - id: FR-017
     document: docs/source/scaflow-v0.1.0-prd.md
+source_references:
+  - document: docs/source/scaflow-v0.1.0-prd.md
+    section: "7. 核心术语与状态"
 dependencies:
   - SFL-005
+dependency_changes: forbidden
 repositories:
   primary: "@control"
   scopes:
@@ -44,6 +46,11 @@ verification:
       executable: pnpm
       args: ["typecheck"]
       timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["test"]
+      timeout_seconds: 900
       required: true
 retry_policy:
   max_attempts: 2

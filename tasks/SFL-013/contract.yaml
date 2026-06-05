@@ -15,6 +15,7 @@ dependencies:
   - SFL-008
   - SFL-009
   - SFL-012
+dependency_changes: forbidden
 repositories:
   primary: "@control"
   scopes:
@@ -47,6 +48,11 @@ verification:
       executable: pnpm
       args: ["typecheck"]
       timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["test"]
+      timeout_seconds: 900
       required: true
 retry_policy:
   max_attempts: 2
