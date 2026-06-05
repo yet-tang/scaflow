@@ -37,6 +37,7 @@ stateDiagram-v2
     development_failed --> developing: scaflow-dev --resume
     ready_for_audit --> developing: scaflow-dev --resume
     ready_for_audit --> auditing: scaflow-audit
+    ready_for_audit --> audit_invalid: handoff fingerprint changed
 
     auditing --> approved: APPROVED
     auditing --> approved_with_follow_ups: APPROVED_WITH_FOLLOW_UPS
@@ -49,7 +50,7 @@ stateDiagram-v2
     blocked --> developing: scaflow-dev --resume
     audit_failed --> auditing: scaflow-audit
     audit_failed --> developing: scaflow-dev --resume
-    audit_invalid --> auditing: scaflow-audit
+    audit_failed --> audit_invalid: handoff fingerprint changed
     audit_invalid --> developing: scaflow-dev --resume
 
     approved --> developing: implementation changes
@@ -85,11 +86,11 @@ The read-only Auditor is active. The implementation must remain frozen.
 
 ### `audit_failed`
 
-The auditor process failed, no report was produced, or the report did not end with a recognized verdict.
+The auditor process failed, no report was produced, or the report did not end with a recognized verdict. A new audit may run against the unchanged developer handoff, or development may resume.
 
 ### `audit_invalid`
 
-The implementation fingerprint changed during audit. The audit report cannot be used as approval evidence.
+The developer handoff fingerprint changed before audit, or the implementation changed during audit. The audit report cannot be used as approval evidence. Development must resume and rerun the complete Task Gate before another audit.
 
 ### `changes_required`
 
@@ -117,7 +118,7 @@ The recorded implementation commit is present in the current branch upstream.
 
 ### `merged`
 
-The recorded implementation commit is contained in the selected base ref.
+The recorded implementation commit is contained in the selected merge target ref. The original frozen development `baseRef` and `baseCommit` remain unchanged; the observed target ref and target commit are recorded separately as `delivery.mergeBaseRef` and `delivery.mergeBaseCommit`.
 
 This marks the local bootstrap workflow complete. Only now may the shared Task Contract be updated separately to:
 
@@ -141,10 +142,13 @@ The helpers never automatically change the shared Task Contract.
 The workflow calculates a SHA-256 fingerprint from:
 
 - the frozen base commit;
-- the full Git diff from that base, including committed, staged, and unstaged tracked changes;
-- all untracked, non-ignored files and their content.
+- the resulting implementation snapshot for all paths present in the frozen base, the current Git index, or the untracked non-ignored file set;
+- each current file's normalized path, content, executable mode, or symlink target;
+- explicit missing markers for deleted base paths.
 
 Files under `.scaflow/` are ignored and therefore do not change the implementation fingerprint.
+
+The snapshot representation is independent of whether the same content is untracked, staged, or committed. This allows the approved implementation fingerprint to remain stable after a correct commit.
 
 The fingerprint is used to ensure:
 
@@ -188,17 +192,20 @@ pnpm scaflow-status SFL-001 --json
 Record verified delivery transitions:
 
 ```bash
-# Run after creating the approved commit
+# Run after creating the approved commit on the task branch
 pnpm scaflow-status SFL-001 --mark committed
 
-# Run after pushing the branch and setting its upstream
+# Run after pushing the task branch and setting its upstream
 pnpm scaflow-status SFL-001 --mark pushed
 
-# Run after the implementation commit is merged and the base ref is current
+# Run after the implementation commit is merged and the target ref is current;
+# this may be run after switching away from the task branch.
 pnpm scaflow-status SFL-001 --base origin/main --mark merged
 ```
 
 The status command verifies Git conditions before accepting each transition. It does not perform commit, push, merge, or Task Contract updates itself.
+
+The automatic merged check requires the recorded implementation commit to remain an ancestor of the selected merge target. Squash merges that replace the implementation commit with a new commit are not automatically supported by this bootstrap checker.
 
 ## Legacy implementation import
 
