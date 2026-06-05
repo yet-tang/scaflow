@@ -6,6 +6,7 @@ import { join } from "node:path";
 import process from "node:process";
 import {
   currentBranch,
+  handoffPaths,
   headCommit,
   implementationFingerprint,
   nextActionForState,
@@ -114,7 +115,7 @@ function verifyCommitReady(root, state) {
   return { commit, fingerprint };
 }
 
-function markState(root, taskId, loaded, mark) {
+function markState(root, taskId, loaded, mark, mergeBaseRef) {
   const state = loaded.state;
   const defaults = {
     baseRef: state.baseRef,
@@ -174,7 +175,7 @@ function markState(root, taskId, loaded, mark) {
       fail(`cannot mark merged from workflow state ${state.workflowState}`);
     }
     if (!state.delivery?.commit) fail("pushed state has no recorded commit");
-    const baseRef = options.baseRef ?? state.baseRef;
+    const baseRef = mergeBaseRef ?? state.baseRef;
     resolveGitRef(root, baseRef);
     verifyCommitMerged(root, state.delivery.commit, baseRef);
     return transitionWorkflowState({
@@ -254,13 +255,24 @@ process.chdir(root);
 ensureTask(options.taskId);
 
 const branch = currentBranch(root);
-const guessedBaseRef = options.baseRef ?? "main";
-const guessedBaseCommit = resolveGitRef(root, guessedBaseRef);
-let loaded = readWorkflowState(root, options.taskId, {
-  baseRef: guessedBaseRef,
-  baseCommit: guessedBaseCommit,
-  branch,
-});
+const paths = handoffPaths(root, options.taskId);
+let loaded;
+if (existsSync(paths.state)) {
+  // Defaults are ignored when the state file exists, so status does not require a local `main` ref.
+  loaded = readWorkflowState(root, options.taskId, {
+    baseRef: options.baseRef ?? "main",
+    baseCommit: "",
+    branch,
+  });
+} else {
+  const baseRef = options.baseRef ?? "main";
+  const baseCommit = resolveGitRef(root, baseRef);
+  loaded = readWorkflowState(root, options.taskId, {
+    baseRef,
+    baseCommit,
+    branch,
+  });
+}
 
 if (!loaded.exists && options.mark) {
   fail("no local workflow state exists; run scaflow-dev or scaflow-audit first");
@@ -271,7 +283,7 @@ if (loaded.exists && options.baseRef && options.mark !== "merged" && options.bas
 }
 
 if (options.mark) {
-  const state = markState(root, options.taskId, loaded, options.mark);
+  const state = markState(root, options.taskId, loaded, options.mark, options.baseRef);
   loaded = { state, exists: true, paths: loaded.paths };
 }
 
