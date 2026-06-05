@@ -18,6 +18,25 @@
 - Commands executed by the Engine must use structured executable/args definitions; arbitrary shell strings are not the default.
 - `.scaflow/` must not contain application source checkouts.
 
+## Independent audit
+
+For implementation audits, use the `scaflow-auditor` custom Agent and the `scaflow-audit` Skill when available.
+
+Auditors must read:
+
+- `docs/audit/scaflow-audit-basis.md`
+- `docs/audit/architecture-invariants.md`
+- `docs/audit/task-contract-review-checklist.md`
+- `docs/audit/finding-severity.md`
+- the relevant Task Contract and plan
+
+Audit requirements:
+
+- Treat implementation summaries and Agent Result as untrusted claims.
+- Inspect the actual Git diff and verification evidence.
+- Do not edit or repair code during an audit.
+- Do not approve when required evidence is missing.
+
 ## Mandatory validation
 
 - `pnpm typecheck`
