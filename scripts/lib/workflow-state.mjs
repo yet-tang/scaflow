@@ -33,7 +33,7 @@ const TRANSITIONS = Object.freeze({
   ready: ["developing", "ready_for_audit"],
   developing: ["ready_for_audit", "development_failed"],
   development_failed: ["developing"],
-  ready_for_audit: ["auditing", "developing"],
+  ready_for_audit: ["auditing", "developing", "audit_invalid"],
   auditing: [
     "approved",
     "approved_with_follow_ups",
@@ -42,8 +42,8 @@ const TRANSITIONS = Object.freeze({
     "audit_failed",
     "audit_invalid",
   ],
-  audit_failed: ["auditing", "developing"],
-  audit_invalid: ["auditing", "developing"],
+  audit_failed: ["auditing", "developing", "audit_invalid"],
+  audit_invalid: ["developing"],
   changes_required: ["developing"],
   blocked: ["developing"],
   approved_with_follow_ups: ["developing", "committed"],
@@ -170,6 +170,8 @@ export function createInitialState({ taskId, baseRef, baseCommit, branch }) {
       pullRequest: null,
       merged: false,
       mergedAt: null,
+      mergeBaseRef: null,
+      mergeBaseCommit: null,
     },
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -324,10 +326,10 @@ export function nextActionForState(state, { approvalCurrent = true } = {}) {
     case "development_failed":
     case "changes_required":
     case "blocked":
+    case "audit_invalid":
       return `Run: pnpm scaflow-dev ${state.taskId} --base ${state.baseRef} --resume`;
     case "ready_for_audit":
     case "audit_failed":
-    case "audit_invalid":
       return `Freeze changes, then run: pnpm scaflow-audit ${state.taskId} --base ${state.baseRef}`;
     case "auditing":
       return "Audit is active. Freeze all code changes.";
@@ -337,7 +339,7 @@ export function nextActionForState(state, { approvalCurrent = true } = {}) {
     case "committed":
       return `Push the branch, then run: pnpm scaflow-status ${state.taskId} --mark pushed`;
     case "pushed":
-      return `After merge and updating ${state.baseRef}, run: pnpm scaflow-status ${state.taskId} --mark merged`;
+      return `After merge and updating the target base ref, run: pnpm scaflow-status ${state.taskId} --base origin/main --mark merged`;
     case "merged":
       return "Local workflow is complete. The shared Task may now be updated to definition_state: completed.";
     default:
