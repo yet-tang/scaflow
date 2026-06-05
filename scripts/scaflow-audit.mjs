@@ -130,38 +130,14 @@ if (!implementationHasChanges(root, baseCommit)) {
 }
 
 const currentFingerprint = implementationFingerprint(root, baseCommit);
-
-// Backward-compatible import for work completed before the state machine existed.
-if (!loaded.exists || loaded.state.workflowState === "ready") {
-  const imported = transitionWorkflowState({
-    root,
-    taskId: options.taskId,
-    defaults,
-    to: "ready_for_audit",
-    event: "LEGACY_DEVELOPMENT_IMPORTED",
-    patch: {
-      implementationFingerprint: currentFingerprint,
-      development: {
-        attempt: Math.max(1, loaded.state.development?.attempt ?? 0),
-        finishedAt: new Date().toISOString(),
-        report: existsSync(loaded.paths.developerReport)
-          ? join(".scaflow", "handoffs", options.taskId, "developer-report.md")
-          : null,
-        imported: true,
-        lastError: null,
-      },
-    },
-    metadata: { implementationFingerprint: currentFingerprint },
-  });
-  loaded = { state: imported.state, exists: true, paths: imported.paths };
-}
-
+const legacyImportNeeded = !loaded.exists || loaded.state.workflowState === "ready";
+const effectiveState = legacyImportNeeded ? "ready_for_audit" : loaded.state.workflowState;
 const allowedStates = new Set(["ready_for_audit", "audit_failed", "audit_invalid"]);
-if (!allowedStates.has(loaded.state.workflowState)) {
+if (!allowedStates.has(effectiveState)) {
   fail(`audit is not allowed from workflow state ${loaded.state.workflowState}`);
 }
 
-if (loaded.state.implementationFingerprint && loaded.state.implementationFingerprint !== currentFingerprint) {
+if (!legacyImportNeeded && loaded.state.implementationFingerprint && loaded.state.implementationFingerprint !== currentFingerprint) {
   patchWorkflowState({
     root,
     taskId: options.taskId,
@@ -199,16 +175,43 @@ const prompt = buildPrompt({
 console.log(`[scaflow-audit] task: ${options.taskId}`);
 console.log(`[scaflow-audit] branch: ${branch}`);
 console.log(`[scaflow-audit] base: ${options.baseRef} (${baseCommit.slice(0, 12)})`);
-console.log(`[scaflow-audit] workflow state: ${loaded.state.workflowState} -> auditing`);
+console.log(`[scaflow-audit] workflow state: ${effectiveState} -> auditing`);
 console.log(`[scaflow-audit] round: ${round}`);
 console.log(`[scaflow-audit] report: ${relativeReportPath}`);
 console.log(`[scaflow-audit] implementation fingerprint: ${currentFingerprint}`);
 console.log("[scaflow-audit] Freeze all code changes until this audit finishes.");
 
 if (options.dryRun) {
+  if (legacyImportNeeded) {
+    console.log("[scaflow-audit] dry-run: legacy ready_for_audit state would be imported without writing files.");
+  }
   console.log("\n--- prompt ---\n");
   console.log(prompt);
   process.exit(0);
+}
+
+if (legacyImportNeeded) {
+  const imported = transitionWorkflowState({
+    root,
+    taskId: options.taskId,
+    defaults,
+    to: "ready_for_audit",
+    event: "LEGACY_DEVELOPMENT_IMPORTED",
+    patch: {
+      implementationFingerprint: currentFingerprint,
+      development: {
+        attempt: Math.max(1, loaded.state.development?.attempt ?? 0),
+        finishedAt: new Date().toISOString(),
+        report: existsSync(loaded.paths.developerReport)
+          ? join(".scaflow", "handoffs", options.taskId, "developer-report.md")
+          : null,
+        imported: true,
+        lastError: null,
+      },
+    },
+    metadata: { implementationFingerprint: currentFingerprint },
+  });
+  loaded = { state: imported.state, exists: true, paths: imported.paths };
 }
 
 transitionWorkflowState({
