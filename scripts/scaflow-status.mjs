@@ -176,9 +176,9 @@ function markState(root, taskId, loaded, mark, mergeBaseRef) {
       fail(`cannot mark merged from workflow state ${state.workflowState}`);
     }
     if (!state.delivery?.commit) fail("pushed state has no recorded commit");
-    const baseRef = mergeBaseRef ?? state.baseRef;
-    resolveGitRef(root, baseRef);
-    verifyCommitMerged(root, state.delivery.commit, baseRef);
+    const targetRef = mergeBaseRef ?? state.baseRef;
+    const targetCommit = resolveGitRef(root, targetRef);
+    verifyCommitMerged(root, state.delivery.commit, targetRef);
     return transitionWorkflowState({
       root,
       taskId,
@@ -186,15 +186,17 @@ function markState(root, taskId, loaded, mark, mergeBaseRef) {
       to: "merged",
       event: "IMPLEMENTATION_MERGED",
       patch: {
-        baseRef,
         delivery: {
           merged: true,
           mergedAt: new Date().toISOString(),
+          mergeBaseRef: targetRef,
+          mergeBaseCommit: targetCommit,
         },
       },
       metadata: {
         commit: state.delivery.commit,
-        baseRef,
+        mergeBaseRef: targetRef,
+        mergeBaseCommit: targetCommit,
         observedFromBranch: currentBranch(root),
       },
     }).state;
@@ -204,21 +206,27 @@ function markState(root, taskId, loaded, mark, mergeBaseRef) {
 }
 
 function statusSnapshot(root, state, paths) {
+  const observedBranch = currentBranch(root);
   let currentFingerprint = null;
   let approvalCurrent = null;
-  try {
-    currentFingerprint = implementationFingerprint(root, state.baseCommit);
-    approvalCurrent = state.approvedFingerprint
-      ? currentFingerprint === state.approvedFingerprint
-      : null;
-  } catch {
-    // Status must remain readable even when the local Git repository is temporarily inconsistent.
+
+  // Approval freshness is meaningful only while inspecting the original task branch.
+  if (observedBranch === state.branch && state.workflowState !== "merged") {
+    try {
+      currentFingerprint = implementationFingerprint(root, state.baseCommit);
+      approvalCurrent = state.approvedFingerprint
+        ? currentFingerprint === state.approvedFingerprint
+        : null;
+    } catch {
+      // Status must remain readable even when the local Git repository is temporarily inconsistent.
+    }
   }
 
   return {
     taskId: state.taskId,
     workflowState: state.workflowState,
     branch: state.branch,
+    observedBranch,
     baseRef: state.baseRef,
     baseCommit: state.baseCommit,
     implementationFingerprint: state.implementationFingerprint,
@@ -238,8 +246,9 @@ function printStatus(snapshot) {
   const short = (value) => (value ? value.slice(0, 12) : "-");
   console.log(`Task:             ${snapshot.taskId}`);
   console.log(`Workflow state:   ${snapshot.workflowState.toUpperCase()}`);
-  console.log(`Branch:           ${snapshot.branch}`);
-  console.log(`Base:             ${snapshot.baseRef}@${short(snapshot.baseCommit)}`);
+  console.log(`Task branch:      ${snapshot.branch}`);
+  console.log(`Current branch:   ${snapshot.observedBranch}`);
+  console.log(`Frozen base:      ${snapshot.baseRef}@${short(snapshot.baseCommit)}`);
   console.log(`Implementation:   ${short(snapshot.implementationFingerprint)}`);
   console.log(`Approval current: ${snapshot.approvalCurrent === null ? "n/a" : snapshot.approvalCurrent ? "yes" : "NO - STALE"}`);
   console.log(`Developer attempt:${String(snapshot.development?.attempt ?? 0).padStart(4, " ")}`);
@@ -251,6 +260,7 @@ function printStatus(snapshot) {
   console.log(`Pushed:           ${snapshot.delivery?.pushed ? "yes" : "no"}`);
   console.log(`Upstream:         ${snapshot.delivery?.upstream ?? "-"}`);
   console.log(`Merged:           ${snapshot.delivery?.merged ? "yes" : "no"}`);
+  console.log(`Merge target:     ${snapshot.delivery?.mergeBaseRef ? `${snapshot.delivery.mergeBaseRef}@${short(snapshot.delivery.mergeBaseCommit)}` : "-"}`);
   console.log(`\nNext action:\n  ${snapshot.nextAction}`);
 }
 
