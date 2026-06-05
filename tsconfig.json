@@ -1,0 +1,17 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./apps/cli" },
+    { "path": "./packages/changeset" },
+    { "path": "./packages/codex-runtime" },
+    { "path": "./packages/config" },
+    { "path": "./packages/core" },
+    { "path": "./packages/git" },
+    { "path": "./packages/schemas" },
+    { "path": "./packages/state" },
+    { "path": "./packages/template" },
+    { "path": "./packages/testkit" },
+    { "path": "./packages/verification" },
+    { "path": "./packages/workspace" }
+  ]
+}
