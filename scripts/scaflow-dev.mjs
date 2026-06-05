@@ -1,9 +1,17 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import process from "node:process";
+import {
+  currentBranch,
+  implementationFingerprint,
+  implementationHasChanges,
+  readWorkflowState,
+  resolveGitRef,
+  transitionWorkflowState,
+} from "./lib/workflow-state.mjs";
 
 function fail(message, code = 1) {
   console.error(`[scaflow-dev] ${message}`);
@@ -72,12 +80,6 @@ function ensureCodex() {
   if (result.status !== 0) fail("Codex CLI is not installed or not available in PATH");
 }
 
-function ensureBaseRef(baseRef) {
-  const result = run("git", ["rev-parse", "--verify", `${baseRef}^{commit}`], { capture: true });
-  if (result.status !== 0) fail(`base ref does not resolve to a commit: ${baseRef}`);
-  return result.stdout.trim();
-}
-
 function ensureTask(taskId) {
   const contractPath = join("tasks", taskId, "contract.yaml");
   if (!existsSync(contractPath)) fail(`Task Contract not found: ${contractPath}`);
@@ -87,11 +89,9 @@ function ensureTask(taskId) {
   return contractPath;
 }
 
-function ensureBranch(taskId) {
-  const result = run("git", ["branch", "--show-current"], { capture: true });
-  if (result.status !== 0) fail("unable to determine current branch");
-  const branch = result.stdout.trim();
-  if (!branch) fail("detached HEAD is not supported by this helper");
+function ensureTaskBranch(root, taskId) {
+  const branch = currentBranch(root);
+  if (branch === "DETACHED_HEAD") fail("detached HEAD is not supported by this helper");
   if (branch === "main" || branch === "master") {
     fail(`refusing to develop ${taskId} directly on protected branch ${branch}. Create a task branch first.`);
   }
@@ -105,25 +105,47 @@ function buildPrompt({ taskId, baseRef, baseCommit, contractPath, reportPath, re
 const options = parseArgs(process.argv.slice(2));
 const root = ensureRepositoryRoot();
 ensureCodex();
-const baseCommit = ensureBaseRef(options.baseRef);
+const baseCommit = resolveGitRef(root, options.baseRef);
 const contractPath = ensureTask(options.taskId);
-const branch = ensureBranch(options.taskId);
-
-const handoffDir = resolve(root, ".scaflow", "handoffs", options.taskId);
-mkdirSync(handoffDir, { recursive: true });
-const reportPath = join(".scaflow", "handoffs", options.taskId, "developer-report.md");
-const metadataPath = join(handoffDir, "handoff.json");
-const metadata = {
-  taskId: options.taskId,
+const branch = ensureTaskBranch(root, options.taskId);
+const defaults = {
   baseRef: options.baseRef,
   baseCommit,
   branch,
-  mode: options.resume ? "resume" : "initial",
-  startedAt: new Date().toISOString(),
-  developerReport: reportPath,
 };
-writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+const loaded = readWorkflowState(root, options.taskId, defaults);
 
+if (loaded.exists) {
+  if (loaded.state.baseCommit !== baseCommit || loaded.state.baseRef !== options.baseRef) {
+    fail(`workflow was created against ${loaded.state.baseRef}@${loaded.state.baseCommit.slice(0, 12)}; use the same base or start a new task workflow`);
+  }
+  if (loaded.state.branch !== branch) {
+    fail(`workflow belongs to branch ${loaded.state.branch}, not ${branch}`);
+  }
+}
+
+const initialStates = new Set(["ready"]);
+const resumeStates = new Set([
+  "development_failed",
+  "changes_required",
+  "blocked",
+  "audit_failed",
+  "audit_invalid",
+  "ready_for_audit",
+  "approved",
+  "approved_with_follow_ups",
+]);
+const currentState = loaded.state.workflowState;
+if (options.resume) {
+  if (!resumeStates.has(currentState)) {
+    fail(`--resume is not allowed from workflow state ${currentState}`);
+  }
+} else if (!initialStates.has(currentState)) {
+  fail(`initial development is not allowed from workflow state ${currentState}; use --resume when appropriate`);
+}
+
+const reportPath = join(".scaflow", "handoffs", options.taskId, "developer-report.md");
+const metadataPath = loaded.paths.handoff;
 const prompt = buildPrompt({
   taskId: options.taskId,
   baseRef: options.baseRef,
@@ -136,6 +158,7 @@ const prompt = buildPrompt({
 console.log(`[scaflow-dev] task: ${options.taskId}`);
 console.log(`[scaflow-dev] branch: ${branch}`);
 console.log(`[scaflow-dev] base: ${options.baseRef} (${baseCommit.slice(0, 12)})`);
+console.log(`[scaflow-dev] workflow state: ${currentState} -> developing`);
 console.log(`[scaflow-dev] report: ${reportPath}`);
 
 if (options.dryRun) {
@@ -144,8 +167,118 @@ if (options.dryRun) {
   process.exit(0);
 }
 
-const result = run("codex", ["-C", root, "-s", "workspace-write", prompt]);
-if (result.status !== 0) fail(`Codex developer session exited with code ${result.status}`, result.status ?? 1);
+const startedAt = new Date().toISOString();
+const started = transitionWorkflowState({
+  root,
+  taskId: options.taskId,
+  defaults,
+  to: "developing",
+  event: options.resume ? "DEVELOPMENT_RESUMED" : "DEVELOPMENT_STARTED",
+  patch: {
+    implementationFingerprint: null,
+    approvedFingerprint: null,
+    development: {
+      attempt: (loaded.state.development?.attempt ?? 0) + 1,
+      startedAt,
+      finishedAt: null,
+      report: reportPath,
+      imported: false,
+      lastError: null,
+    },
+    audit: {
+      verdict: null,
+      report: null,
+    },
+  },
+  metadata: { branch, baseRef: options.baseRef, baseCommit },
+});
 
-console.log(`\n[scaflow-dev] Developer session finished.`);
-console.log(`[scaflow-dev] Freeze code changes and run: scaflow-audit ${options.taskId} --base ${options.baseRef}`);
+writeFileSync(
+  metadataPath,
+  `${JSON.stringify({
+    taskId: options.taskId,
+    baseRef: options.baseRef,
+    baseCommit,
+    branch,
+    mode: options.resume ? "resume" : "initial",
+    startedAt,
+    developerReport: reportPath,
+  }, null, 2)}\n`,
+  "utf8",
+);
+
+const result = run("codex", ["-C", root, "-s", "workspace-write", prompt]);
+if (result.status !== 0) {
+  transitionWorkflowState({
+    root,
+    taskId: options.taskId,
+    defaults,
+    to: "development_failed",
+    event: "DEVELOPMENT_FAILED",
+    patch: {
+      development: {
+        finishedAt: new Date().toISOString(),
+        lastError: `Codex developer session exited with code ${result.status}`,
+      },
+    },
+    metadata: { exitCode: result.status },
+  });
+  fail(`Codex developer session exited with code ${result.status}`, result.status ?? 1);
+}
+
+if (!existsSync(started.paths.developerReport) || readFileSync(started.paths.developerReport, "utf8").trim().length === 0) {
+  transitionWorkflowState({
+    root,
+    taskId: options.taskId,
+    defaults,
+    to: "development_failed",
+    event: "DEVELOPMENT_REPORT_MISSING",
+    patch: {
+      development: {
+        finishedAt: new Date().toISOString(),
+        lastError: `developer report was not created at ${reportPath}`,
+      },
+    },
+  });
+  fail(`developer report was not created at ${reportPath}`);
+}
+
+if (!implementationHasChanges(root, baseCommit)) {
+  transitionWorkflowState({
+    root,
+    taskId: options.taskId,
+    defaults,
+    to: "development_failed",
+    event: "DEVELOPMENT_NO_CHANGES",
+    patch: {
+      development: {
+        finishedAt: new Date().toISOString(),
+        lastError: "implementation has no changes relative to the frozen base",
+      },
+    },
+  });
+  fail("implementation has no changes relative to the frozen base");
+}
+
+const fingerprint = implementationFingerprint(root, baseCommit);
+transitionWorkflowState({
+  root,
+  taskId: options.taskId,
+  defaults,
+  to: "ready_for_audit",
+  event: "DEVELOPMENT_FINISHED",
+  patch: {
+    implementationFingerprint: fingerprint,
+    approvedFingerprint: null,
+    development: {
+      finishedAt: new Date().toISOString(),
+      report: reportPath,
+      lastError: null,
+    },
+  },
+  metadata: { implementationFingerprint: fingerprint },
+});
+
+console.log(`\n[scaflow-dev] Development finished.`);
+console.log("[scaflow-dev] Workflow state: ready_for_audit");
+console.log(`[scaflow-dev] Freeze code changes and run: pnpm scaflow-audit ${options.taskId} --base ${options.baseRef}`);
