@@ -1,0 +1,52 @@
+version: 1
+task:
+  id: SFL-007
+  title: Event Log and Audit Trail
+  type: state
+  risk_level: R2
+  definition_state: ready
+objective:
+  summary: Persist task run events, command events, verification events, and state transitions in transactionally consistent audit records.
+source_requirements:
+  - id: NFR-003
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: FR-017
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-005
+  - SFL-006
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - packages/state/**
+        - packages/core/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/**
+        - .scaflow/state.db
+acceptance_criteria:
+  - id: SFL-007-AC-01
+    description: State changes and domain events can be written atomically in one transaction.
+  - id: SFL-007-AC-02
+    description: Event records include correlation ID, timestamp, type, and redacted payload.
+  - id: SFL-007-AC-03
+    description: Tests cover rollback on partial write failure.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/state", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

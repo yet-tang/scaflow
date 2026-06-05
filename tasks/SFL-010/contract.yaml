@@ -1,0 +1,53 @@
+version: 1
+task:
+  id: SFL-010
+  title: Template Engine
+  type: foundation
+  risk_level: R1
+  definition_state: ready
+objective:
+  summary: Render Scaflow Project Repository templates without overwriting user-modified files.
+source_requirements:
+  - id: FR-001
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: NFR-002
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-008
+  - SFL-009
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - packages/template/**
+        - templates/default-project-scaflow/**
+        - fixtures/projects/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/**
+        - .scaflow/**
+acceptance_criteria:
+  - id: SFL-010-AC-01
+    description: Template rendering creates required SPR files and directories.
+  - id: SFL-010-AC-02
+    description: Re-running template rendering never overwrites modified user files.
+  - id: SFL-010-AC-03
+    description: Template .gitignore excludes workspace/ and .scaflow/.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/template", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

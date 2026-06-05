@@ -1,0 +1,60 @@
+version: 1
+task:
+  id: SFL-025
+  title: Test Integrity and Agent Result Verifiers
+  type: verification
+  risk_level: R3
+  definition_state: ready
+objective:
+  summary: Verify MVP test integrity rules and validate Agent Result schema without trusting Agent self-reporting over Git diff or command results.
+source_requirements:
+  - id: FR-012
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: FR-013
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-019
+  - SFL-021
+  - SFL-022
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - packages/verification/**
+        - packages/schemas/**
+        - packages/git/**
+        - fixtures/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/repos/**
+        - .scaflow/state.db
+acceptance_criteria:
+  - id: SFL-025-AC-01
+    description: Test integrity detects deleted tests, added skip/only, modified verification commands, modified quality gates, protected test directory changes, and lowered coverage thresholds.
+  - id: SFL-025-AC-02
+    description: Agent Result schema validates status, summary, changed files, commands run, acceptance mapping, limitations, decision requests, and risks.
+  - id: SFL-025-AC-03
+    description: Real Git diff and command results remain authoritative over Agent Result claims.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/verification", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/schemas", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

@@ -1,0 +1,50 @@
+version: 1
+task:
+  id: SFL-020
+  title: Codex SDK and Exec Adapters
+  type: runtime
+  risk_level: R3
+  definition_state: ready
+objective:
+  summary: Implement real Codex adapters for @openai/codex-sdk and codex exec while keeping regular tests fully mock-based.
+source_requirements:
+  - id: FR-008
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-019
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - packages/codex-runtime/**
+        - packages/schemas/**
+        - packages/testkit/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/repos/**
+        - .scaflow/**
+acceptance_criteria:
+  - id: SFL-020-AC-01
+    description: SDK and exec adapters implement the runtime contract and preserve session, event, result, cancel, and timeout semantics.
+  - id: SFL-020-AC-02
+    description: Regular pnpm test does not require Codex credentials, network, or a live service.
+  - id: SFL-020-AC-03
+    description: Live smoke tests are available only through an explicit test:live command.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/codex-runtime", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

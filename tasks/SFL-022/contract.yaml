@@ -1,0 +1,57 @@
+version: 1
+task:
+  id: SFL-022
+  title: Scope Verifier
+  type: verification
+  risk_level: R3
+  definition_state: ready
+objective:
+  summary: Verify actual Git diff against authorized repositories, access modes, allowed paths, forbidden paths, protected control files, and TaskRun isolation.
+source_requirements:
+  - id: FR-010
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-016
+  - SFL-021
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - packages/verification/**
+        - packages/git/**
+        - packages/schemas/**
+        - fixtures/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/repos/**
+        - .scaflow/state.db
+acceptance_criteria:
+  - id: SFL-022-AC-01
+    description: Unauthorized repository, read-only repository, unauthorized path, and protected control file diffs fail immediately.
+  - id: SFL-022-AC-02
+    description: Repository identity mismatch fails immediately and is not auto-repairable.
+  - id: SFL-022-AC-03
+    description: Scope verifier never treats workspace/repos as a formal TaskRun write target.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/verification", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/git", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

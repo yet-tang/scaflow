@@ -1,0 +1,52 @@
+version: 1
+task:
+  id: SFL-005
+  title: State Store Foundation
+  type: state
+  risk_level: R2
+  definition_state: ready
+objective:
+  summary: Implement the SQLite state store foundation with connection management, migrations, transactions, and repository boundaries.
+source_requirements:
+  - id: FR-017
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: NFR-002
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-002
+  - SFL-003
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - packages/state/**
+        - packages/testkit/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/**
+        - .scaflow/state.db
+acceptance_criteria:
+  - id: SFL-005-AC-01
+    description: State store initialization creates and migrates a SQLite database transactionally.
+  - id: SFL-005-AC-02
+    description: Migrations are idempotent and record applied schema versions.
+  - id: SFL-005-AC-03
+    description: Tests use temporary databases and do not write application source into .scaflow.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/state", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

@@ -1,0 +1,51 @@
+version: 1
+task:
+  id: SFL-006
+  title: Domain State Machines
+  type: state
+  risk_level: R2
+  definition_state: ready
+objective:
+  summary: Define Task, TaskRun, and ChangeSet states, legal transitions, and state authority rules.
+source_requirements:
+  - id: section-7
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: FR-017
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-005
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - packages/state/**
+        - packages/schemas/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/**
+        - .scaflow/state.db
+acceptance_criteria:
+  - id: SFL-006-AC-01
+    description: Task definition state, TaskRun state, and ChangeSet state transitions are validated separately.
+  - id: SFL-006-AC-02
+    description: TaskRun succeeded is not accepted as Task completed.
+  - id: SFL-006-AC-03
+    description: Illegal transitions fail with structured errors.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/state", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

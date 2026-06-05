@@ -1,0 +1,54 @@
+version: 1
+task:
+  id: SFL-013
+  title: Scaflow Doctor
+  type: cli
+  risk_level: R2
+  definition_state: ready
+objective:
+  summary: Implement Doctor framework and pre-bootstrap checks with PASS, WARN, FAIL, SKIP, and JSON output.
+source_requirements:
+  - id: FR-004
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-004
+  - SFL-008
+  - SFL-009
+  - SFL-012
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - apps/cli/**
+        - packages/core/**
+        - packages/config/**
+        - packages/git/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/**
+        - .scaflow/**
+acceptance_criteria:
+  - id: SFL-013-AC-01
+    description: Doctor checks Node.js, pnpm, Git, engine version, schema validity, Git access, and optional Docker.
+  - id: SFL-013-AC-02
+    description: Missing workspace before bootstrap is WARN, not FAIL.
+  - id: SFL-013-AC-03
+    description: Doctor supports human and JSON output with PASS, WARN, FAIL, and SKIP statuses.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/cli", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

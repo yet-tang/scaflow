@@ -1,0 +1,61 @@
+version: 1
+task:
+  id: SFL-029
+  title: State Recovery
+  type: state
+  risk_level: R3
+  definition_state: ready
+objective:
+  summary: Recover or safely orphan non-terminal TaskRuns on engine startup and implement run inspect/status.
+source_requirements:
+  - id: FR-017
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-007
+  - SFL-017
+  - SFL-019
+  - SFL-028
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - packages/state/**
+        - packages/core/**
+        - packages/codex-runtime/**
+        - packages/workspace/**
+        - apps/cli/**
+        - fixtures/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/repos/**
+        - .scaflow/state.db
+acceptance_criteria:
+  - id: SFL-029-AC-01
+    description: Startup scans non-terminal TaskRuns and restores those that can continue.
+  - id: SFL-029-AC-02
+    description: Runs with missing process/session/workspace are marked orphaned without deleting logs or evidence.
+  - id: SFL-029-AC-03
+    description: run inspect/status surfaces TaskRun, session, verification, ChangeSet, and evidence details.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/state", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/core", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

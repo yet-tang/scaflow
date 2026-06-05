@@ -1,0 +1,51 @@
+version: 1
+task:
+  id: SFL-002
+  title: Error and Logging Foundation
+  type: foundation
+  risk_level: R2
+  definition_state: ready
+objective:
+  summary: Provide shared error metadata, recoverability, suggestions, redaction, and correlation IDs for later packages.
+source_requirements:
+  - id: NFR-003
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: SEC-004
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-001
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - packages/core/**
+        - packages/testkit/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/**
+        - .scaflow/**
+acceptance_criteria:
+  - id: SFL-002-AC-01
+    description: Shared errors include stable code, recoverable flag, optional suggestion, and correlation ID.
+  - id: SFL-002-AC-02
+    description: Logging helpers redact secret-like values before persistence or display.
+  - id: SFL-002-AC-03
+    description: Error and logging tests cover normal, recoverable, and redacted output cases.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/core", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

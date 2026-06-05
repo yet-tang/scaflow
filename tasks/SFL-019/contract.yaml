@@ -1,0 +1,58 @@
+version: 1
+task:
+  id: SFL-019
+  title: Agent Runtime Contract and Mock
+  type: runtime
+  risk_level: R2
+  definition_state: ready
+objective:
+  summary: Define the Agent Runtime contract, Agent Result schema, streaming events, sessions, timeout behavior, and Mock Runtime.
+source_requirements:
+  - id: FR-008
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: FR-013
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-003
+  - SFL-018
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - packages/codex-runtime/**
+        - packages/schemas/**
+        - packages/testkit/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/repos/**
+        - .scaflow/**
+acceptance_criteria:
+  - id: SFL-019-AC-01
+    description: Runtime contract supports working directory, session ID, streaming events, final Agent Result, continue, cancel, and timeout.
+  - id: SFL-019-AC-02
+    description: Agent Result schema is exported from @scaflow/schemas.
+  - id: SFL-019-AC-03
+    description: Mock Runtime can drive deterministic tests without network or credentials.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/codex-runtime", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/schemas", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

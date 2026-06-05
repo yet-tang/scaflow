@@ -1,0 +1,58 @@
+version: 1
+task:
+  id: SFL-021
+  title: Verification Framework
+  type: verification
+  risk_level: R2
+  definition_state: ready
+objective:
+  summary: Build the verification run framework, result schema, failure classification, and artifact foundation.
+source_requirements:
+  - id: G-005
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-007
+  - SFL-018
+  - SFL-019
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - packages/verification/**
+        - packages/schemas/**
+        - packages/state/**
+        - packages/testkit/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/repos/**
+        - .scaflow/state.db
+acceptance_criteria:
+  - id: SFL-021-AC-01
+    description: Verification runs record status, verifier results, artifacts, and failure classifications.
+  - id: SFL-021-AC-02
+    description: Verification Result schema is exported from @scaflow/schemas.
+  - id: SFL-021-AC-03
+    description: Framework can compose multiple verifiers without trusting Agent self-reporting.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/verification", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/schemas", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

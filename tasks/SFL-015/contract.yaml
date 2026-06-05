@@ -1,0 +1,58 @@
+version: 1
+task:
+  id: SFL-015
+  title: Task Contract Implementation
+  type: schema
+  risk_level: R2
+  definition_state: ready
+objective:
+  summary: Implement Task Contract schema and task list, show, and validate commands.
+source_requirements:
+  - id: FR-005
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-003
+  - SFL-004
+  - SFL-009
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - apps/cli/**
+        - packages/schemas/**
+        - packages/config/**
+        - fixtures/projects/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/**
+        - .scaflow/**
+acceptance_criteria:
+  - id: SFL-015-AC-01
+    description: Task Contract schema v1 validates task metadata, scopes, paths, acceptance criteria, verification commands, dependencies, and retry policy.
+  - id: SFL-015-AC-02
+    description: read-write scopes reject empty allowed_paths.
+  - id: SFL-015-AC-03
+    description: task list/show/validate operate on tasks/<task-id>/contract.yaml.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/schemas", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/cli", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2
