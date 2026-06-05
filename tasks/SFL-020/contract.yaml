@@ -12,12 +12,14 @@ source_requirements:
     document: docs/source/scaflow-v0.1.0-prd.md
 dependencies:
   - SFL-019
+dependency_changes: allowed
 repositories:
   primary: "@control"
   scopes:
     - repository: "@control"
       access: read-write
       allowed_paths:
+        - pnpm-lock.yaml
         - packages/codex-runtime/**
         - packages/schemas/**
         - packages/testkit/**
@@ -43,6 +45,11 @@ verification:
       executable: pnpm
       args: ["typecheck"]
       timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["test"]
+      timeout_seconds: 900
       required: true
 retry_policy:
   max_attempts: 2

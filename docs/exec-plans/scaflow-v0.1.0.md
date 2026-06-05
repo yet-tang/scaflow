@@ -51,7 +51,13 @@ source_requirements:
   - id: NFR-001
     document: docs/source/scaflow-v0.1.0-prd.md
 
+source_references:
+  - document: docs/source/scaflow-v0.1.0-prd.md
+    section: "14. 非功能需求"
+
 dependencies: []
+
+dependency_changes: forbidden
 
 repositories:
   primary: "@control"
@@ -89,8 +95,11 @@ Rules:
 - `read-write` scopes must include at least one `allowed_paths` entry. Empty `allowed_paths` is invalid for write scopes.
 - `read-only` scopes have no write authorization. Empty write paths are only valid under read-only semantics.
 - `source_requirements` use structured references with stable requirement IDs.
+- `source_references` may cite document sections. Requirement IDs and section references must not be mixed in one field.
+- `dependency_changes` is required and must be `allowed` or `forbidden`.
 - Task type enum: `foundation`, `schema`, `cli`, `state`, `git`, `workspace`, `runtime`, `verification`, `changeset`, `integration`, `control-plane-change`.
 - Public schemas are exported from `@scaflow/schemas`: Project Config, Repository Manifest, Task Contract, Revision Set, Agent Result, Verification Result, and ChangeSet Manifest.
+- `definition_state: ready` means the contract is approved. A task is runnable only when `definition_state == ready` and all dependencies are complete.
 
 ## State Authority
 
@@ -104,6 +113,8 @@ Rules:
 ## Internal Package Names
 
 `@scaflow/*` is the private monorepo internal scope for v0.1.0 development. Public release requires confirming npm scope ownership or migrating to an owned organization scope.
+
+Root package name is fixed as `@scaflow/root` and must stay private.
 
 ```text
 @scaflow/cli
@@ -152,9 +163,12 @@ Rules:
 | SFL-026 | Repair Loop | Add failure summaries, continue session, repair policy, blocked/failed decisions. | SFL-019, SFL-022, SFL-024, SFL-025 | R3 | runtime |
 | SFL-027 | Commit Generation | Create independent per-repository commits after verification passes. | SFL-026 | R3 | git |
 | SFL-028 | ChangeSet | Generate ChangeSet manifests, SQLite state, show/list, and pending control updates. | SFL-027 | R2 | changeset |
-| SFL-029 | State Recovery | Recover or orphan non-terminal runs and support run inspect/status. | SFL-007, SFL-017, SFL-019, SFL-028 | R3 | state |
+| SFL-029 | State Recovery | Recover or orphan non-terminal runs and support run inspect/status. | SFL-007, SFL-017, SFL-019, SFL-028, SFL-034 | R3 | state |
 | SFL-030 | Workspace Cleanup | Implement `run clean`, completed/older-than cleanup, and evidence preservation. | SFL-029 | R2 | workspace |
-| SFL-031 | MVP End-to-End Test | Use Mock Runtime to cover the PRD section 17 E2E scenario. | SFL-011, SFL-014, SFL-020, SFL-030 | R3 | integration |
+| SFL-031 | MVP End-to-End Test | Use Mock Runtime to cover the PRD section 17 E2E scenario. | SFL-011, SFL-014, SFL-020, SFL-030, SFL-034 | R3 | integration |
+| SFL-032 | Security Policy Schema and Loader | Define security and command policy schemas, protected paths, network defaults, and shell policy. | SFL-003, SFL-008 | R3 | schema |
+| SFL-033 | Agent Runtime Sandbox Enforcement | Enforce runtime sandbox, writable roots, env cleaning, network defaults, and forbidden host resources. | SFL-020, SFL-023, SFL-032 | R3 | runtime |
+| SFL-034 | Task Execution Orchestrator | Implement `task run/status/cancel` and compose prepare, context, runtime, verification, repair, commit, and ChangeSet. | SFL-026, SFL-028, SFL-033 | R3 | runtime |
 
 ## Dependency DAG
 
@@ -214,20 +228,25 @@ Layer 13:
 
 Layer 14:
   SFL-026
+  SFL-032
 
 Layer 15:
   SFL-027
+  SFL-033
 
 Layer 16:
   SFL-028
 
 Layer 17:
-  SFL-029
+  SFL-034
 
 Layer 18:
-  SFL-030
+  SFL-029
 
 Layer 19:
+  SFL-030
+
+Layer 20:
   SFL-031
 ```
 
@@ -260,6 +279,14 @@ Package validation:
 pnpm --filter @scaflow/<package> test
 ```
 
+Every task contract uses the same task gate:
+
+```text
+package-focused tests
+-> pnpm typecheck
+-> pnpm test
+```
+
 Live Codex tests are explicit and never part of regular `pnpm test`:
 
 ```bash
@@ -282,3 +309,5 @@ Optional/manual:
 `SFL-001 Engine Monorepo Foundation` is the first task that can start.
 
 Its contract must prohibit Git, SQLite, Workspace, Codex, Verification, ChangeSet, and CLI business behavior implementation.
+
+It must also allow `pnpm-lock.yaml`, because `pnpm install` may create or update the lockfile during foundation setup.

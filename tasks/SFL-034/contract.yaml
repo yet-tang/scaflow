@@ -1,0 +1,84 @@
+version: 1
+task:
+  id: SFL-034
+  title: Task Execution Orchestrator
+  type: runtime
+  risk_level: R3
+  definition_state: ready
+objective:
+  summary: Implement scaflow task run, task status, and task cancel by composing preparation, context assembly, runtime execution, verification, repair, commit generation, and ChangeSet creation.
+source_requirements:
+  - id: FR-006
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: FR-008
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: FR-014
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: FR-015
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: FR-016
+    document: docs/source/scaflow-v0.1.0-prd.md
+source_references:
+  - document: docs/source/scaflow-v0.1.0-prd.md
+    section: "10.5 运行 Task"
+  - document: docs/source/scaflow-v0.1.0-prd.md
+    section: "12. CLI 范围"
+dependencies:
+  - SFL-026
+  - SFL-028
+  - SFL-033
+dependency_changes: forbidden
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - apps/cli/**
+        - packages/core/**
+        - packages/codex-runtime/**
+        - packages/workspace/**
+        - packages/verification/**
+        - packages/git/**
+        - packages/changeset/**
+        - packages/state/**
+        - fixtures/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/repos/**
+        - .scaflow/state.db
+acceptance_criteria:
+  - id: SFL-034-AC-01
+    description: task run reads a ready Task Contract, creates a TaskRun, prepares workspace, assembles context, starts runtime, records session and events, verifies, repairs when allowed, commits, generates ChangeSet, and updates TaskRun state.
+  - id: SFL-034-AC-02
+    description: task status reports TaskRun state, runtime session, verification state, repair state, commit state, and ChangeSet state.
+  - id: SFL-034-AC-03
+    description: task cancel cancels active runtime work, records cancellation events, and transitions TaskRun state safely.
+  - id: SFL-034-AC-04
+    description: Orchestrator never treats TaskRun succeeded as Task completed.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/core", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/cli", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["test"]
+      timeout_seconds: 900
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

@@ -8,13 +8,22 @@ task:
 objective:
   summary: Add the deterministic local MVP E2E test using Mock Runtime to cover PRD section 17.
 source_requirements:
-  - id: section-17
+  - id: G-001
     document: docs/source/scaflow-v0.1.0-prd.md
+  - id: G-003
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: G-005
+    document: docs/source/scaflow-v0.1.0-prd.md
+source_references:
+  - document: docs/source/scaflow-v0.1.0-prd.md
+    section: "17. MVP 验收场景"
 dependencies:
   - SFL-011
   - SFL-014
   - SFL-020
   - SFL-030
+  - SFL-034
+dependency_changes: forbidden
 repositories:
   primary: "@control"
   scopes:

@@ -1,19 +1,22 @@
 version: 1
 task:
-  id: SFL-015
-  title: Task Contract Implementation
+  id: SFL-032
+  title: Security Policy Schema and Loader
   type: schema
-  risk_level: R2
+  risk_level: R3
   definition_state: ready
 objective:
-  summary: Implement Task Contract schema and task list, show, and validate commands.
+  summary: Define security and command policy schemas, protected paths, network defaults, shell policy, and policy loading precedence.
 source_requirements:
-  - id: FR-005
+  - id: SEC-001
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: SEC-002
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: SEC-003
     document: docs/source/scaflow-v0.1.0-prd.md
 dependencies:
   - SFL-003
-  - SFL-004
-  - SFL-009
+  - SFL-008
 dependency_changes: forbidden
 repositories:
   primary: "@control"
@@ -21,21 +24,21 @@ repositories:
     - repository: "@control"
       access: read-write
       allowed_paths:
-        - apps/cli/**
         - packages/schemas/**
         - packages/config/**
+        - templates/default-project-scaflow/policies/**
         - fixtures/projects/**
       forbidden_paths:
         - docs/source/scaflow-v0.1.0-prd.md
         - workspace/**
         - .scaflow/**
 acceptance_criteria:
-  - id: SFL-015-AC-01
-    description: Task Contract schema v1 validates task metadata, scopes, paths, acceptance criteria, verification commands, dependencies, and retry policy.
-  - id: SFL-015-AC-02
-    description: read-write scopes reject empty allowed_paths.
-  - id: SFL-015-AC-03
-    description: task list/show/validate operate on tasks/<task-id>/contract.yaml.
+  - id: SFL-032-AC-01
+    description: policies/security.yaml and policies/command-policy.yaml schemas define protected paths, writable roots, network defaults, Docker socket visibility, shell policy, and control-plane protection.
+  - id: SFL-032-AC-02
+    description: Security policy loading fails closed when required policy files are invalid or missing after project initialization.
+  - id: SFL-032-AC-03
+    description: control-plane-change is required for protected policy, workflow, schema, engine version, release permission, and approval record edits.
 verification:
   commands:
     - repository: "@control"
@@ -45,7 +48,7 @@ verification:
       required: true
     - repository: "@control"
       executable: pnpm
-      args: ["--filter", "@scaflow/cli", "test"]
+      args: ["--filter", "@scaflow/config", "test"]
       timeout_seconds: 300
       required: true
     - repository: "@control"
