@@ -1,0 +1,57 @@
+version: 1
+task:
+  id: SFL-028
+  title: ChangeSet
+  type: changeset
+  risk_level: R2
+  definition_state: ready
+objective:
+  summary: Generate ChangeSet manifests, track ChangeSet state, and implement show/list without promising cross-repository atomicity.
+source_requirements:
+  - id: FR-016
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-027
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - packages/changeset/**
+        - packages/schemas/**
+        - packages/state/**
+        - apps/cli/**
+        - fixtures/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/repos/**
+        - .scaflow/state.db
+acceptance_criteria:
+  - id: SFL-028-AC-01
+    description: ChangeSet records Task ID, TaskRun ID, base commits, result commits, changed files, verification result, merge order, and state.
+  - id: SFL-028-AC-02
+    description: Manifest is written to .scaflow/evidence/changesets first and synchronized to changesets/ only when @control is read-write.
+  - id: SFL-028-AC-03
+    description: ChangeSet docs and output explicitly do not claim cross-repository atomicity.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/changeset", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/cli", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

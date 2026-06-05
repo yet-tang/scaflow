@@ -1,0 +1,55 @@
+version: 1
+task:
+  id: SFL-023
+  title: Structured Command Runner
+  type: verification
+  risk_level: R3
+  definition_state: ready
+objective:
+  summary: Execute structured commands safely with explicit repository cwd, executable/args arrays, timeout, env allowlist, truncation, artifacts, process termination, and shell policy.
+source_requirements:
+  - id: FR-009
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: FR-011
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-002
+  - SFL-021
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - packages/verification/**
+        - packages/core/**
+        - packages/testkit/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/repos/**
+        - .scaflow/state.db
+acceptance_criteria:
+  - id: SFL-023-AC-01
+    description: Commands are executed from explicit repository worktrees using executable and args arrays.
+  - id: SFL-023-AC-02
+    description: Timeout terminates the process and records a structured failure.
+  - id: SFL-023-AC-03
+    description: Environment variables are allowlisted and stdout/stderr are truncated with full artifacts saved.
+  - id: SFL-023-AC-04
+    description: Arbitrary shell strings are rejected unless explicit shell policy allows them.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/verification", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

@@ -1,0 +1,57 @@
+version: 1
+task:
+  id: SFL-008
+  title: Project Config Schema
+  type: schema
+  risk_level: R2
+  definition_state: ready
+objective:
+  summary: Define scaflow.yaml schema, engine version pinning, and project validation foundation.
+source_requirements:
+  - id: FR-001
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: FR-004
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-003
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - packages/schemas/**
+        - packages/config/**
+        - fixtures/projects/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/**
+        - .scaflow/**
+acceptance_criteria:
+  - id: SFL-008-AC-01
+    description: scaflow.yaml validates project metadata and pinned engine version.
+  - id: SFL-008-AC-02
+    description: Invalid config returns structured schema errors.
+  - id: SFL-008-AC-03
+    description: Tests include valid and invalid project config fixtures.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/config", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/schemas", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

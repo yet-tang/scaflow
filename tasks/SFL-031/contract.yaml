@@ -1,0 +1,57 @@
+version: 1
+task:
+  id: SFL-031
+  title: MVP End-to-End Test
+  type: integration
+  risk_level: R3
+  definition_state: ready
+objective:
+  summary: Add the deterministic local MVP E2E test using Mock Runtime to cover PRD section 17.
+source_requirements:
+  - id: section-17
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-011
+  - SFL-014
+  - SFL-020
+  - SFL-030
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - fixtures/**
+        - packages/testkit/**
+        - packages/core/**
+        - docs/quality/**
+        - apps/cli/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/repos/**
+        - .scaflow/state.db
+acceptance_criteria:
+  - id: SFL-031-AC-01
+    description: Required E2E uses Mock Runtime and does not require network, credentials, or live Codex.
+  - id: SFL-031-AC-02
+    description: E2E covers init, bootstrap, task prepare, mock run, scope violation, repair, verification, commits, ChangeSet, recovery, evidence, and cleanup.
+  - id: SFL-031-AC-03
+    description: E2E proves workspace/repos developer changes are never affected by formal TaskRuns.
+  - id: SFL-031-AC-04
+    description: Optional live Codex smoke test is separate and manual.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["test"]
+      timeout_seconds: 1200
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

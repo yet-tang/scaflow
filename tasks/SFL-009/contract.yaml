@@ -1,0 +1,58 @@
+version: 1
+task:
+  id: SFL-009
+  title: Repository Manifest Schema
+  type: schema
+  risk_level: R2
+  definition_state: ready
+objective:
+  summary: Define repositories.yaml schema and validate repository IDs, checkout paths, dependencies, and structured commands.
+source_requirements:
+  - id: FR-002
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: FR-009
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-003
+  - SFL-008
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - packages/schemas/**
+        - packages/config/**
+        - fixtures/projects/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/**
+        - .scaflow/**
+acceptance_criteria:
+  - id: SFL-009-AC-01
+    description: Repository IDs are unique and may not start with @.
+  - id: SFL-009-AC-02
+    description: Checkout directories are unique, relative, and reject path traversal.
+  - id: SFL-009-AC-03
+    description: Dependency references must point to declared repositories.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/config", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/schemas", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

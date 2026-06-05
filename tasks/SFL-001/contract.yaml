@@ -1,0 +1,67 @@
+version: 1
+task:
+  id: SFL-001
+  title: Engine Monorepo Foundation
+  type: foundation
+  risk_level: R1
+  definition_state: ready
+objective:
+  summary: Establish the TypeScript monorepo foundation, package names, root scripts, and smoke tests without implementing product behavior.
+source_requirements:
+  - id: NFR-001
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: NFR-005
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies: []
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - package.json
+        - pnpm-workspace.yaml
+        - tsconfig*.json
+        - vitest.config.*
+        - apps/*/package.json
+        - apps/*/tsconfig.json
+        - apps/*/src/index.ts
+        - apps/*/tests/smoke.test.ts
+        - packages/*/package.json
+        - packages/*/tsconfig.json
+        - packages/*/src/index.ts
+        - packages/*/tests/smoke.test.ts
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/**
+        - .scaflow/**
+acceptance_criteria:
+  - id: SFL-001-AC-01
+    description: Root and workspace packages are named consistently with the approved @scaflow/* internal scope.
+  - id: SFL-001-AC-02
+    description: pnpm install, pnpm typecheck, and pnpm test can run successfully.
+  - id: SFL-001-AC-03
+    description: Every workspace package is visible to pnpm and has one executable smoke test.
+  - id: SFL-001-AC-04
+    description: No Git, SQLite, Workspace, Codex, Verification, ChangeSet, or CLI business behavior is implemented.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["install"]
+      timeout_seconds: 900
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["test"]
+      timeout_seconds: 900
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2

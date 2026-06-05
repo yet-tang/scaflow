@@ -1,0 +1,52 @@
+version: 1
+task:
+  id: SFL-003
+  title: Schema Infrastructure
+  type: schema
+  risk_level: R1
+  definition_state: ready
+objective:
+  summary: Establish the shared Zod schema package, parse helpers, typed errors, and public schema exports.
+source_requirements:
+  - id: FR-002
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: FR-005
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-001
+  - SFL-002
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - packages/schemas/**
+        - packages/testkit/**
+      forbidden_paths:
+        - docs/source/scaflow-v0.1.0-prd.md
+        - workspace/**
+        - .scaflow/**
+acceptance_criteria:
+  - id: SFL-003-AC-01
+    description: Schema parse helpers return stable structured errors.
+  - id: SFL-003-AC-02
+    description: Public schema exports are centralized under @scaflow/schemas.
+  - id: SFL-003-AC-03
+    description: Tests cover successful parsing and invalid input formatting.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/schemas", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["typecheck"]
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2
