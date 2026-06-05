@@ -1,17 +1,20 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import process from "node:process";
+import {
+  currentBranch,
+  implementationFingerprint,
+  implementationHasChanges,
+  parseAuditVerdict,
+  patchWorkflowState,
+  readWorkflowState,
+  resolveGitRef,
+  transitionWorkflowState,
+  workflowStateForVerdict,
+} from "./lib/workflow-state.mjs";
 
 function fail(message, code = 1) {
   console.error(`[scaflow-audit] ${message}`);
@@ -83,65 +86,6 @@ function ensureTask(taskId) {
   return contractPath;
 }
 
-function ensureBaseRef(baseRef) {
-  const result = run("git", ["rev-parse", "--verify", `${baseRef}^{commit}`], { capture: true });
-  if (result.status !== 0) fail(`base ref does not resolve to a commit: ${baseRef}`);
-  return result.stdout.trim();
-}
-
-function currentBranch() {
-  const result = run("git", ["branch", "--show-current"], { capture: true });
-  if (result.status !== 0) fail("unable to determine current branch");
-  return result.stdout.trim() || "DETACHED_HEAD";
-}
-
-function listUntrackedFiles() {
-  const result = run("git", ["ls-files", "--others", "--exclude-standard", "-z"], { capture: true });
-  if (result.status !== 0) fail("unable to list untracked files");
-  return result.stdout.split("\0").filter(Boolean).sort();
-}
-
-function hashPath(hash, path) {
-  if (!existsSync(path)) {
-    hash.update(`missing:${path}\0`);
-    return;
-  }
-  const stats = statSync(path);
-  if (stats.isDirectory()) {
-    hash.update(`dir:${path}\0`);
-    for (const child of readdirSync(path).sort()) {
-      hashPath(hash, join(path, child));
-    }
-    return;
-  }
-  hash.update(`file:${path}:${stats.mode}:${stats.size}\0`);
-  hash.update(readFileSync(path));
-}
-
-function workingTreeFingerprint(root) {
-  const hash = createHash("sha256");
-  const commands = [
-    ["status", "--porcelain=v1", "-z"],
-    ["diff", "--binary", "--no-ext-diff"],
-    ["diff", "--cached", "--binary", "--no-ext-diff"],
-  ];
-
-  for (const args of commands) {
-    const result = run("git", args, { capture: true });
-    if (result.status !== 0) fail(`unable to fingerprint working tree: git ${args.join(" ")}`);
-    hash.update(args.join(" "));
-    hash.update("\0");
-    hash.update(result.stdout);
-    hash.update("\0");
-  }
-
-  for (const path of listUntrackedFiles()) {
-    hashPath(hash, resolve(root, path));
-  }
-
-  return hash.digest("hex");
-}
-
 function nextAuditRound(handoffDir) {
   if (!existsSync(handoffDir)) return 1;
   const rounds = readdirSync(handoffDir)
@@ -163,17 +107,84 @@ const options = parseArgs(process.argv.slice(2));
 const root = ensureRepositoryRoot();
 ensureCodex();
 const contractPath = ensureTask(options.taskId);
-const baseCommit = ensureBaseRef(options.baseRef);
-const branch = currentBranch();
+const baseCommit = resolveGitRef(root, options.baseRef);
+const branch = currentBranch(root);
+const defaults = {
+  baseRef: options.baseRef,
+  baseCommit,
+  branch,
+};
+let loaded = readWorkflowState(root, options.taskId, defaults);
 
-const handoffDir = resolve(root, ".scaflow", "handoffs", options.taskId);
-mkdirSync(handoffDir, { recursive: true });
-const round = nextAuditRound(handoffDir);
+if (loaded.exists) {
+  if (loaded.state.baseCommit !== baseCommit || loaded.state.baseRef !== options.baseRef) {
+    fail(`workflow was created against ${loaded.state.baseRef}@${loaded.state.baseCommit.slice(0, 12)}; use the same base`);
+  }
+  if (loaded.state.branch !== branch) {
+    fail(`workflow belongs to branch ${loaded.state.branch}, not ${branch}`);
+  }
+}
+
+if (!implementationHasChanges(root, baseCommit)) {
+  fail("implementation has no changes relative to the frozen base");
+}
+
+const currentFingerprint = implementationFingerprint(root, baseCommit);
+
+// Backward-compatible import for work completed before the state machine existed.
+if (!loaded.exists || loaded.state.workflowState === "ready") {
+  const imported = transitionWorkflowState({
+    root,
+    taskId: options.taskId,
+    defaults,
+    to: "ready_for_audit",
+    event: "LEGACY_DEVELOPMENT_IMPORTED",
+    patch: {
+      implementationFingerprint: currentFingerprint,
+      development: {
+        attempt: Math.max(1, loaded.state.development?.attempt ?? 0),
+        finishedAt: new Date().toISOString(),
+        report: existsSync(loaded.paths.developerReport)
+          ? join(".scaflow", "handoffs", options.taskId, "developer-report.md")
+          : null,
+        imported: true,
+        lastError: null,
+      },
+    },
+    metadata: { implementationFingerprint: currentFingerprint },
+  });
+  loaded = { state: imported.state, exists: true, paths: imported.paths };
+}
+
+const allowedStates = new Set(["ready_for_audit", "audit_failed", "audit_invalid"]);
+if (!allowedStates.has(loaded.state.workflowState)) {
+  fail(`audit is not allowed from workflow state ${loaded.state.workflowState}`);
+}
+
+if (loaded.state.implementationFingerprint && loaded.state.implementationFingerprint !== currentFingerprint) {
+  patchWorkflowState({
+    root,
+    taskId: options.taskId,
+    defaults,
+    event: "IMPLEMENTATION_CHANGED_BEFORE_AUDIT",
+    patch: {
+      development: {
+        lastError: "implementation changed after developer handoff",
+      },
+    },
+    metadata: {
+      expected: loaded.state.implementationFingerprint,
+      actual: currentFingerprint,
+    },
+  });
+  fail(`implementation changed after developer handoff; run pnpm scaflow-dev ${options.taskId} --base ${options.baseRef} --resume`);
+}
+
+const round = nextAuditRound(loaded.paths.directory);
 const relativeReportPath = join(".scaflow", "handoffs", options.taskId, `audit-round-${round}.md`);
 const reportPath = resolve(root, relativeReportPath);
 const developerReportPath = join(".scaflow", "handoffs", options.taskId, "developer-report.md");
-const beforeFingerprint = workingTreeFingerprint(root);
-
+const startedAt = new Date().toISOString();
 const prompt = buildPrompt({
   taskId: options.taskId,
   baseRef: options.baseRef,
@@ -188,9 +199,10 @@ const prompt = buildPrompt({
 console.log(`[scaflow-audit] task: ${options.taskId}`);
 console.log(`[scaflow-audit] branch: ${branch}`);
 console.log(`[scaflow-audit] base: ${options.baseRef} (${baseCommit.slice(0, 12)})`);
+console.log(`[scaflow-audit] workflow state: ${loaded.state.workflowState} -> auditing`);
 console.log(`[scaflow-audit] round: ${round}`);
 console.log(`[scaflow-audit] report: ${relativeReportPath}`);
-console.log(`[scaflow-audit] working tree fingerprint: ${beforeFingerprint}`);
+console.log(`[scaflow-audit] implementation fingerprint: ${currentFingerprint}`);
 console.log("[scaflow-audit] Freeze all code changes until this audit finishes.");
 
 if (options.dryRun) {
@@ -198,6 +210,26 @@ if (options.dryRun) {
   console.log(prompt);
   process.exit(0);
 }
+
+transitionWorkflowState({
+  root,
+  taskId: options.taskId,
+  defaults,
+  to: "auditing",
+  event: "AUDIT_STARTED",
+  patch: {
+    implementationFingerprint: currentFingerprint,
+    audit: {
+      round,
+      startedAt,
+      finishedAt: null,
+      verdict: null,
+      report: relativeReportPath,
+      lastError: null,
+    },
+  },
+  metadata: { round, implementationFingerprint: currentFingerprint },
+});
 
 const result = run("codex", [
   "exec",
@@ -210,17 +242,18 @@ const result = run("codex", [
   prompt,
 ]);
 
-const afterFingerprint = workingTreeFingerprint(root);
-const metadataPath = join(handoffDir, `audit-round-${round}.json`);
+const afterFingerprint = implementationFingerprint(root, baseCommit);
+const stableImplementation = currentFingerprint === afterFingerprint;
+const metadataPath = join(loaded.paths.directory, `audit-round-${round}.json`);
 const metadata = {
   taskId: options.taskId,
   baseRef: options.baseRef,
   baseCommit,
   branch,
   round,
-  startedFingerprint: beforeFingerprint,
+  startedFingerprint: currentFingerprint,
   finishedFingerprint: afterFingerprint,
-  stableWorkingTree: beforeFingerprint === afterFingerprint,
+  stableImplementation,
   codexExitCode: result.status,
   report: relativeReportPath,
   finishedAt: new Date().toISOString(),
@@ -228,15 +261,114 @@ const metadata = {
 writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
 
 if (result.status !== 0) {
+  transitionWorkflowState({
+    root,
+    taskId: options.taskId,
+    defaults,
+    to: "audit_failed",
+    event: "AUDIT_PROCESS_FAILED",
+    patch: {
+      audit: {
+        finishedAt: new Date().toISOString(),
+        lastError: `Codex auditor session exited with code ${result.status}`,
+      },
+    },
+    metadata: { round, exitCode: result.status },
+  });
   fail(`Codex auditor session exited with code ${result.status}. See ${relativeReportPath} if it exists.`, result.status ?? 1);
 }
 
-if (beforeFingerprint !== afterFingerprint) {
-  const invalidNotice = `\n\n---\n\nAUDIT INVALIDATED: the working tree changed during audit.\nStart fingerprint: ${beforeFingerprint}\nEnd fingerprint: ${afterFingerprint}\n`;
+if (!stableImplementation) {
+  const invalidNotice = `\n\n---\n\nAUDIT INVALIDATED: the implementation changed during audit.\nStart fingerprint: ${currentFingerprint}\nEnd fingerprint: ${afterFingerprint}\n`;
   writeFileSync(reportPath, `${existsSync(reportPath) ? readFileSync(reportPath, "utf8") : ""}${invalidNotice}`, "utf8");
-  fail(`working tree changed during audit; round ${round} is invalid and must be repeated`);
+  transitionWorkflowState({
+    root,
+    taskId: options.taskId,
+    defaults,
+    to: "audit_invalid",
+    event: "AUDIT_INVALIDATED",
+    patch: {
+      implementationFingerprint: afterFingerprint,
+      approvedFingerprint: null,
+      audit: {
+        finishedAt: new Date().toISOString(),
+        verdict: null,
+        lastError: "implementation changed during audit",
+      },
+    },
+    metadata: { round, startedFingerprint: currentFingerprint, finishedFingerprint: afterFingerprint },
+  });
+  fail(`implementation changed during audit; round ${round} is invalid and must be repeated`);
 }
 
-console.log(`\n[scaflow-audit] Audit round ${round} finished with a stable working tree.`);
+if (!existsSync(reportPath) || readFileSync(reportPath, "utf8").trim().length === 0) {
+  transitionWorkflowState({
+    root,
+    taskId: options.taskId,
+    defaults,
+    to: "audit_failed",
+    event: "AUDIT_REPORT_MISSING",
+    patch: {
+      audit: {
+        finishedAt: new Date().toISOString(),
+        lastError: `audit report was not created at ${relativeReportPath}`,
+      },
+    },
+    metadata: { round },
+  });
+  fail(`audit report was not created at ${relativeReportPath}`);
+}
+
+const report = readFileSync(reportPath, "utf8");
+const verdict = parseAuditVerdict(report);
+const targetState = workflowStateForVerdict(verdict);
+if (!verdict || !targetState) {
+  transitionWorkflowState({
+    root,
+    taskId: options.taskId,
+    defaults,
+    to: "audit_failed",
+    event: "AUDIT_VERDICT_MISSING",
+    patch: {
+      audit: {
+        finishedAt: new Date().toISOString(),
+        lastError: "audit report did not end with a recognized verdict",
+      },
+    },
+    metadata: { round },
+  });
+  fail("audit report did not end with a recognized verdict");
+}
+
+transitionWorkflowState({
+  root,
+  taskId: options.taskId,
+  defaults,
+  to: targetState,
+  event: `AUDIT_${verdict}`,
+  patch: {
+    implementationFingerprint: currentFingerprint,
+    approvedFingerprint:
+      targetState === "approved" || targetState === "approved_with_follow_ups"
+        ? currentFingerprint
+        : null,
+    audit: {
+      round,
+      finishedAt: new Date().toISOString(),
+      verdict,
+      report: relativeReportPath,
+      lastError: null,
+    },
+  },
+  metadata: { round, verdict, implementationFingerprint: currentFingerprint },
+});
+
+console.log(`\n[scaflow-audit] Audit round ${round} finished.`);
+console.log(`[scaflow-audit] Verdict: ${verdict}`);
+console.log(`[scaflow-audit] Workflow state: ${targetState}`);
 console.log(`[scaflow-audit] Report: ${relativeReportPath}`);
-console.log(`[scaflow-audit] If changes are required, run: scaflow-dev ${options.taskId} --base ${options.baseRef} --resume`);
+if (targetState === "changes_required" || targetState === "blocked") {
+  console.log(`[scaflow-audit] Next: pnpm scaflow-dev ${options.taskId} --base ${options.baseRef} --resume`);
+} else {
+  console.log(`[scaflow-audit] Next: pnpm scaflow-status ${options.taskId}`);
+}
