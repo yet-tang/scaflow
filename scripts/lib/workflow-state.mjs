@@ -118,6 +118,13 @@ function listTrackedFiles(root) {
     .sort();
 }
 
+function listBaseFiles(root, baseCommit) {
+  return runGit(root, ["ls-tree", "-r", "--name-only", "-z", baseCommit])
+    .stdout.split("\0")
+    .filter(Boolean)
+    .sort();
+}
+
 export function handoffPaths(root, taskId) {
   const directory = resolve(root, ".scaflow", "handoffs", taskId);
   return {
@@ -274,9 +281,15 @@ export function implementationFingerprint(root, baseCommit) {
   hash.update(`base:${baseCommit}\0`);
 
   // Hash the resulting implementation snapshot rather than a patch encoding.
-  // This keeps the fingerprint stable when the same files move from untracked,
-  // to staged, to committed without changing their content or executable mode.
-  const files = [...new Set([...listTrackedFiles(root), ...listUntrackedFiles(root)])].sort();
+  // Include base paths so committed deletions remain represented as missing files.
+  // This keeps the fingerprint stable across untracked, staged, and committed states.
+  const files = [
+    ...new Set([
+      ...listBaseFiles(root, baseCommit),
+      ...listTrackedFiles(root),
+      ...listUntrackedFiles(root),
+    ]),
+  ].sort();
   for (const path of files) {
     hashPath(hash, resolve(root, path), path);
   }
