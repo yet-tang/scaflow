@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+
+# Scaflow managed local data
+/workspace/
+/.scaflow/
+
+# Local environment
+.env
+.env.*
+!.env.example
