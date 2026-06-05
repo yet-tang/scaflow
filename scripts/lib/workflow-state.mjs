@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
+  readlinkSync,
   readdirSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -90,7 +91,13 @@ function hashPath(hash, path, relativePath) {
     hash.update(`missing:${relativePath}\0`);
     return;
   }
-  const stats = statSync(path);
+
+  const stats = lstatSync(path);
+  if (stats.isSymbolicLink()) {
+    hash.update(`symlink:${relativePath}:${readlinkSync(path)}\0`);
+    return;
+  }
+
   if (stats.isDirectory()) {
     hash.update(`dir:${relativePath}\0`);
     for (const child of readdirSync(path).sort()) {
@@ -98,8 +105,17 @@ function hashPath(hash, path, relativePath) {
     }
     return;
   }
-  hash.update(`file:${relativePath}:${stats.mode}:${stats.size}\0`);
+
+  const mode = stats.mode & 0o111 ? "100755" : "100644";
+  hash.update(`file:${relativePath}:${mode}:${stats.size}\0`);
   hash.update(readFileSync(path));
+}
+
+function listTrackedFiles(root) {
+  return runGit(root, ["ls-files", "-z"])
+    .stdout.split("\0")
+    .filter(Boolean)
+    .sort();
 }
 
 export function handoffPaths(root, taskId) {
@@ -255,13 +271,16 @@ export function listUntrackedFiles(root) {
 
 export function implementationFingerprint(root, baseCommit) {
   const hash = createHash("sha256");
-  const diff = runGit(root, ["diff", "--binary", "--no-ext-diff", baseCommit, "--"]).stdout;
   hash.update(`base:${baseCommit}\0`);
-  hash.update(diff);
-  hash.update("\0");
-  for (const path of listUntrackedFiles(root)) {
+
+  // Hash the resulting implementation snapshot rather than a patch encoding.
+  // This keeps the fingerprint stable when the same files move from untracked,
+  // to staged, to committed without changing their content or executable mode.
+  const files = [...new Set([...listTrackedFiles(root), ...listUntrackedFiles(root)])].sort();
+  for (const path of files) {
     hashPath(hash, resolve(root, path), path);
   }
+
   return `sha256:${hash.digest("hex")}`;
 }
 
