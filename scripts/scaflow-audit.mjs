@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { basename, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import process from "node:process";
 
 function fail(message, code = 1) {
