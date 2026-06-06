@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   parseTaskContract,
+  parseTaskSelection,
   slugifyTaskTitle,
   topologicalTaskOrder,
 } from "./task-graph.mjs";
@@ -43,6 +44,27 @@ test("parses an empty dependency list", () => {
 dependencies: []
 `);
   assert.deepEqual(parsed.dependencies, []);
+});
+
+test("parses sequential numeric and canonical task ranges", () => {
+  assert.deepEqual(parseTaskSelection("2-6"), [
+    "SFL-002",
+    "SFL-003",
+    "SFL-004",
+    "SFL-005",
+    "SFL-006",
+  ]);
+  assert.deepEqual(parseTaskSelection("SFL-002..SFL-004"), [
+    "SFL-002",
+    "SFL-003",
+    "SFL-004",
+  ]);
+  assert.deepEqual(parseTaskSelection("SFL-006,SFL-002,4"), [
+    "SFL-002",
+    "SFL-004",
+    "SFL-006",
+  ]);
+  assert.throws(() => parseTaskSelection("6-2"), /ascending/);
 });
 
 test("orders selected tasks by dependencies", () => {
