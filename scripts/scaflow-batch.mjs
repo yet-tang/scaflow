@@ -168,9 +168,11 @@ function markCompleted(worktree, taskId) {
 
 function batchFiles(root, batchId, target) {
   const directory = join(root, ".scaflow", "batches", batchId);
-  mkdirSync(directory, { recursive: true });
+  const contextDirectory = join(directory, "context", "completions");
+  mkdirSync(contextDirectory, { recursive: true });
   return {
     directory,
+    contextDirectory,
     state: join(directory, "state.json"),
     summary: join(directory, "summary.md"),
     lock: join(root, ".scaflow", "batches", `${target}.lock`),
@@ -189,6 +191,7 @@ function writeBatch(files, state) {
     `- Finished: ${state.finishedAt ?? "-"}`,
     `- Current task: ${state.currentTask ?? "-"}`,
     `- Integration worktree: ${state.integrationPath ?? "-"}`,
+    `- Completion context: ${state.contextDirectory ?? "-"}`,
     `- Stop reason: ${state.stopReason ?? "-"}`,
     "",
     "## Tasks",
@@ -204,6 +207,39 @@ function cleanupWorktree(root, path, branch) {
   git(root, ["branch", "-D", branch], { allowFailure: true });
 }
 
+function installCompletionContext(files, taskPath) {
+  if (!existsSync(files.contextDirectory)) return;
+  const entries = readdirSync(files.contextDirectory);
+  if (entries.length === 0) return;
+  const target = join(taskPath, ".scaflow", "context", "completions");
+  mkdirSync(target, { recursive: true });
+  cpSync(files.contextDirectory, target, { recursive: true });
+}
+
+function captureCompletionContext(files, taskPath, taskId) {
+  const sourceMarkdown = join(
+    taskPath,
+    ".scaflow",
+    "handoffs",
+    taskId,
+    "architect",
+    "completion.md",
+  );
+  const sourceJson = join(
+    taskPath,
+    ".scaflow",
+    "handoffs",
+    taskId,
+    "architect",
+    "completion.json",
+  );
+  if (!existsSync(sourceMarkdown) || !existsSync(sourceJson)) {
+    abort(`${taskId} has no validated Architect completion summary`);
+  }
+  cpSync(sourceMarkdown, join(files.contextDirectory, `${taskId}.md`));
+  cpSync(sourceJson, join(files.contextDirectory, `${taskId}.json`));
+}
+
 function executeBatch(options) {
   const selectedIds = parseTaskSelection(options.selector);
   const root = repositoryRoot();
@@ -217,7 +253,7 @@ function executeBatch(options) {
   const integrationPath = join(batchRoot, "dev");
   const integrationBranch = `scaflow/batch-${batchId.toLowerCase()}-${options.target}`;
   const state = {
-    version: 1,
+    version: 2,
     batchId,
     selector: options.selector,
     selectedTasks: selectedIds,
@@ -226,6 +262,7 @@ function executeBatch(options) {
     target: options.target,
     integrationBranch,
     integrationPath,
+    contextDirectory: files.contextDirectory,
     status: "running",
     currentTask: null,
     tasks: selectedIds.map((id) => ({ id, status: "pending", commit: null, error: null })),
@@ -271,6 +308,7 @@ function executeBatch(options) {
       git(root, ["worktree", "add", taskPath, taskBranch]);
       failedWorktree = { path: taskPath, branch: taskBranch };
 
+      installCompletionContext(files, taskPath);
       run("pnpm", ["install", "--frozen-lockfile"], { cwd: taskPath });
       const runResult = run(
         "node",
@@ -299,6 +337,8 @@ function executeBatch(options) {
       if (!["approved", "approved_with_follow_ups"].includes(workflow.workflowState)) {
         abort(`${taskId} ended in unexpected state ${workflow.workflowState}`);
       }
+
+      captureCompletionContext(files, taskPath, taskId);
 
       git(taskPath, ["diff", "--check"]);
       git(taskPath, ["add", "-A"]);
