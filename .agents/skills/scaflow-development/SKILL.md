@@ -1,6 +1,6 @@
 ---
 name: scaflow-development
-description: Implement exactly one approved Scaflow Task Contract through preflight, scoped coding, tests, task gate, self-review, and auditor handoff. Use for implementation work. Do not use for independent audit or product-scope redesign.
+description: Implement exactly one approved Scaflow Task Contract through Architect-guided preflight, scoped coding, tests, task gate, self-review, and auditor handoff. Use for implementation work. Do not use for independent audit or product-scope redesign.
 ---
 
 # Scaflow Task Development
@@ -16,6 +16,9 @@ Identify:
 - implementation branch or TaskRun;
 - `tasks/<task-id>/contract.yaml`;
 - optional `tasks/<task-id>/plan.md`;
+- Architect preparation brief;
+- latest Architect repair brief when present;
+- latest independent audit report when present;
 - current Git status;
 - dependency completion state.
 
@@ -28,10 +31,20 @@ Read:
 3. `ARCHITECTURE.md`;
 4. `docs/source/scaflow-v0.1.0-prd.md`;
 5. `docs/architecture/scaflow-v0.2-baseline.md`;
-6. `docs/exec-plans/scaflow-v0.1.0.md`;
-7. `docs/development/scaflow-development-workflow.md`;
-8. the relevant Task Contract and plan;
-9. package-level instructions and relevant code.
+6. `docs/architecture/scaflow-architect-workflow.md`;
+7. `docs/exec-plans/scaflow-v0.1.0.md`;
+8. `docs/development/scaflow-development-workflow.md`;
+9. the relevant Task Contract and plan;
+10. Architect briefs supplied by the Controller;
+11. package-level instructions and relevant code.
+
+## Architect guidance boundary
+
+- Use the Architect brief as bounded implementation guidance.
+- The Task Contract, PRD, baseline, and security policy remain authoritative.
+- Report conflicts instead of choosing one silently.
+- Do not expand scope merely because the Architect mentions a future concern.
+- On repair rounds, fix only the current Architect repair brief and Auditor findings that fit the Task Contract.
 
 ## Phase 1: Preflight
 
@@ -44,10 +57,11 @@ Before editing:
 5. Confirm the branch or TaskRun belongs to this task.
 6. Parse repository scopes, access modes, allowed paths, forbidden paths, and `dependency_changes`.
 7. Map each acceptance criterion to planned code and test evidence.
-8. List the exact verification commands.
-9. State a short implementation plan.
+8. Map Architect guidance to the Task Contract and identify conflicts.
+9. List the exact verification commands.
+10. State a short implementation plan.
 
-Stop instead of coding when a contract conflicts with the PRD, baseline, security policy, dependency state, repository scope, or existing overlapping changes.
+Stop instead of coding when the contract conflicts with the PRD, baseline, Architect brief, security policy, dependency state, repository scope, or existing overlapping changes.
 
 ## Phase 2: Scoped implementation
 
@@ -120,6 +134,7 @@ Inspect the actual diff and verify:
 - no forbidden or read-only location changed;
 - dependency changes match policy;
 - each acceptance criterion has concrete evidence;
+- Architect must-preserve items remain intact;
 - tests are meaningful and intact;
 - no future-task scope was implemented;
 - no temporary debug code, secrets, generated junk, or placeholder behavior remains;
@@ -127,60 +142,36 @@ Inspect the actual diff and verify:
 
 Fix self-review findings, then rerun the complete task gate.
 
-## Phase 7: Auditor handoff
+## Phase 7: Handoff
 
-After the implementation and full task gate pass:
+After the implementation and full task gate pass, stop for Controller-managed post-development architecture review and independent audit.
 
-- request the `scaflow-auditor` custom Agent;
-- request the `scaflow-audit` Skill;
-- provide Task ID, base ref, implementation branch or diff, actual command results, and known limitations;
-- do not modify files while the independent audit is active.
+The Developer must not invoke Architect or Auditor control commands directly. The Developer's self-review is not final approval.
 
-The developer's self-review is not the final approval.
+## Control-plane prohibition
 
-## Commit and push rule
+Never call:
 
-Default behavior:
+- `scaflow-run`;
+- `scaflow-batch`;
+- delivery-marking commands;
+- `git commit`, `git push`, `git merge`;
+- `git worktree add/remove`.
 
-- do not commit;
-- do not push;
-- do not create a pull request.
-
-Only perform those actions after an explicit user instruction.
+These belong to the deterministic Controller.
 
 ## Required final report
 
-Use this format:
+Include:
 
-```markdown
-## Task
-- ID:
-- Branch / TaskRun:
-- Base ref:
+- Task ID, branch or TaskRun, and base ref;
+- Architect guidance followed and conflicts found;
+- implementation summary and changed files;
+- dependency changes;
+- acceptance-criterion evidence;
+- actual verification commands, exit codes, and results;
+- self-review results;
+- limitations and risks;
+- readiness for architecture review and independent audit.
 
-## Implementation
-- Summary:
-- Changed files:
-- Dependency changes:
-
-## Acceptance evidence
-- <criterion ID>: <evidence>
-
-## Verification
-- `<command>`: PASS/FAIL, exit code
-
-## Self-review
-- Scope checked:
-- Test integrity checked:
-- Future-task scope checked:
-- `git diff --check`:
-
-## Limitations and risks
-- None, or explicit items
-
-## Handoff
-- Ready for independent audit: yes/no
-- Recommended next action:
-```
-
-Do not mark the shared Task `completed` merely because the local implementation or TaskRun succeeded.
+Do not mark the shared Task `completed` merely because local implementation succeeded.
