@@ -42,7 +42,7 @@ task:
   title: Engine Monorepo Foundation
   type: foundation
   risk_level: R1
-  definition_state: ready
+  definition_state: completed
 
 objective:
   summary: Build the TypeScript monorepo foundation.
