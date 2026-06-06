@@ -59,6 +59,29 @@ Autonomous-run requirements:
 - Only one autonomous runner may own a task at a time.
 - Preserve all normal workspace, scope, security, state, and audit invariants.
 
+## Sequential multi-task execution
+
+For unattended sequential execution of a task range, use:
+
+```bash
+pnpm scaflow-batch 2-6
+```
+
+Read `docs/development/sequential-task-batch.md` before changing batch behavior.
+
+Batch requirements:
+
+- Multi-task mode is sequential, not concurrent.
+- Respect Task Contract dependencies and stop before execution when an outside dependency is not completed.
+- Run every task in an isolated worktree under `workspace/runs/batches/`.
+- A later task must start from the integration result of every earlier successful task.
+- Only an implementation that reaches `approved` or `approved_with_follow_ups` may be committed.
+- Integrate approved task commits into `dev` with fast-forward-only semantics.
+- Mark the Task Contract `completed` only after the implementation commit is integrated.
+- Push `dev` with a normal non-forced push and stop on concurrent-update rejection.
+- Stop the complete batch at the first failed or blocked task.
+- Preserve the failed task worktree and batch evidence for inspection.
+
 ## Bootstrap workflow semantics
 
 - Development completion means `ready_for_audit`, not Task completion.
