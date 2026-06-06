@@ -29,7 +29,6 @@
     "scaflow-audit": "node scripts/scaflow-command.mjs audit",
     "scaflow-status": "node scripts/scaflow-status.mjs",
     "scaflow-run": "node scripts/scaflow-command.mjs run",
-    "scaflow-batch": "node scripts/scaflow-command.mjs batch",
-    "scaflow-next-repair": "node scripts/scaflow-next-repair.mjs"
+    "scaflow-batch": "node scripts/scaflow-command.mjs batch"
   }
 }
