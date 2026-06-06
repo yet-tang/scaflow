@@ -4,7 +4,8 @@
 
 1. Read `docs/source/scaflow-v0.1.0-prd.md`.
 2. Read `docs/architecture/scaflow-v0.2-baseline.md`.
-3. Keep Scaflow v0.1.0 limited to the Execution Kernel.
+3. Read `docs/architecture/scaflow-architect-workflow.md`.
+4. Keep Scaflow v0.1.0 limited to the Execution Kernel.
 
 ## Hard constraints
 
@@ -18,97 +19,68 @@
 - Commands executed by the Engine must use structured executable/args definitions; arbitrary shell strings are not the default.
 - `.scaflow/` must not contain application source checkouts.
 
+## Agent team
+
+Controller commands own state, retries, Git, worktrees, delivery, and task sequencing. They invoke:
+
+- `scaflow-architect` for read-only preparation, architecture review, repair guidance, and completion summaries;
+- `scaflow-developer` for scoped implementation and verification;
+- `scaflow-auditor` for independent read-only audit.
+
+Architect does not implement or approve code. Developer does not commit or approve its own work. Auditor independently verifies Architect and Developer claims. Agents do not invoke `scaflow-run`, `scaflow-batch`, delivery transitions, commit, push, merge, or worktree mutation commands.
+
 ## Task development
 
 For implementation work, use the `scaflow-developer` custom Agent and the `scaflow-development` Skill when available.
 
 Developers must read:
 
+- `docs/architecture/scaflow-architect-workflow.md`
 - `docs/exec-plans/scaflow-v0.1.0.md`
 - `docs/development/scaflow-development-workflow.md`
 - `docs/development/bootstrap-workflow-state-machine.md`
-- the relevant Task Contract and plan
+- the relevant Task Contract, plan, and Architect briefs
 
 Development requirements:
 
 - Implement exactly one approved Task Contract at a time.
-- Preflight dependency state, Git status, scopes, paths, dependency policy, acceptance criteria, and verification commands before editing.
+- Preflight dependency state, Git status, scopes, paths, dependency policy, acceptance criteria, Architect guidance, and verification commands before editing.
 - Do not overwrite or absorb unrelated pre-existing changes.
-- Do not modify requirements, policies, or contracts to make implementation pass.
+- Do not modify requirements, policies, contracts, or evidence to make implementation pass.
 - Run the complete Task Contract gate and perform developer self-review.
-- Default to no commit, no push, and no PR unless the user explicitly requests them.
-- Hand completed implementation to the independent Auditor.
-- Use `scaflow-status` to inspect the bootstrap workflow state and record verified delivery transitions.
+- Stop for Controller-managed architecture review and independent audit.
 
 ## Autonomous single-task execution
 
-For unattended execution of one approved Task Contract, use:
+Use `pnpm scaflow-run <TASK-ID> --base <ref>`.
 
-```bash
-pnpm scaflow-run <TASK-ID> --base <ref>
-```
-
-Read `docs/development/autonomous-task-runner.md` before changing the autonomous loop.
-
-Autonomous-run requirements:
-
-- The runner may automate Developer, Task Gate, Auditor, repair, and re-audit only.
-- The default success target is `approved` or `approved_with_follow_ups`.
-- The runner must not commit, push, create or merge a PR, or update the shared Task Contract.
-- `BLOCKED`, retry exhaustion, repeated failure, or an already-active workflow must stop the runner.
-- Only one autonomous runner may own a task at a time.
-- Preserve all normal workspace, scope, security, state, and audit invariants.
+The runner performs Architect preparation, Developer execution, the complete Task Gate, Architect post-development review, independent audit, Architect-guided repair, and Architect completion summary. It succeeds only at `approved` or `approved_with_follow_ups`. It does not commit, push, merge, or update the shared Task Contract.
 
 ## Sequential multi-task execution
 
-For unattended sequential execution of a task range, use:
+Use `pnpm scaflow-batch 2-6`.
 
-```bash
-pnpm scaflow-batch 2-6
-```
-
-Read `docs/development/sequential-task-batch.md` before changing batch behavior.
-
-Batch requirements:
-
-- Multi-task mode is sequential, not concurrent.
-- Respect Task Contract dependencies and stop before execution when an outside dependency is not completed.
-- Run every task in an isolated worktree under `workspace/runs/batches/`.
-- A later task must start from the integration result of every earlier successful task.
-- Only an implementation that reaches `approved` or `approved_with_follow_ups` may be committed.
-- Integrate approved task commits into `dev` with fast-forward-only semantics.
-- Mark the Task Contract `completed` only after the implementation commit is integrated.
-- Push `dev` with a normal non-forced push and stop on concurrent-update rejection.
-- Stop the complete batch at the first failed or blocked task.
-- Preserve the failed task worktree and batch evidence for inspection.
+- Execution is sequential, not concurrent.
+- Every task runs the complete three-Agent workflow.
+- Dependencies must be completed or selected earlier in the batch.
+- Each task uses an isolated worktree under `workspace/runs/batches/`.
+- Later tasks start from prior successful integration results.
+- Only approved implementations may be committed and fast-forwarded into `dev`.
+- Stop at the first failed or blocked task.
 
 ## Bootstrap workflow semantics
 
-- Development completion means `ready_for_audit`, not Task completion.
+- Architect preparation is technical readiness, not implementation approval.
+- Development completion means `ready_for_audit`.
+- Architect `READY_FOR_AUDIT` permits independent review but does not approve code.
 - Audit approval means `approved` or `approved_with_follow_ups`.
-- Local delivery completion means `merged`.
-- The shared Task Contract may become `definition_state: completed` only after merge and through a separate controlled change.
-- Do not bypass legal transitions in `.scaflow/handoffs/<task-id>/state.json`.
-- Do not edit `state.json` or `events.jsonl` manually.
+- Architect completion summary records reusable knowledge but does not complete the Task.
+- The shared Task Contract may become `definition_state: completed` only after integration.
+- Do not manually edit workflow state or event files.
 
 ## Independent audit
 
-For implementation audits, use the `scaflow-auditor` custom Agent and the `scaflow-audit` Skill when available.
-
-Auditors must read:
-
-- `docs/audit/scaflow-audit-basis.md`
-- `docs/audit/architecture-invariants.md`
-- `docs/audit/task-contract-review-checklist.md`
-- `docs/audit/finding-severity.md`
-- the relevant Task Contract and plan
-
-Audit requirements:
-
-- Treat implementation summaries and Agent Result as untrusted claims.
-- Inspect the actual Git diff and verification evidence.
-- Do not edit or repair code during an audit.
-- Do not approve when required evidence is missing.
+Auditors read the Task Contract, plan, Architect briefs, audit policies, actual diff, and verification evidence. Architect briefs and Developer reports remain untrusted claims. Auditors do not repair code and do not defer their verdict to the Architect.
 
 ## Mandatory validation
 
