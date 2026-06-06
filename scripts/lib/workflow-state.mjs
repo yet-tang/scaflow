@@ -30,10 +30,10 @@ export const WORKFLOW_STATES = Object.freeze([
 ]);
 
 const TRANSITIONS = Object.freeze({
-  ready: ["developing", "ready_for_audit"],
+  ready: ["developing", "ready_for_audit", "blocked"],
   developing: ["ready_for_audit", "development_failed"],
-  development_failed: ["developing"],
-  ready_for_audit: ["auditing", "developing", "audit_invalid"],
+  development_failed: ["developing", "blocked"],
+  ready_for_audit: ["auditing", "developing", "audit_invalid", "changes_required", "blocked"],
   auditing: [
     "approved",
     "approved_with_follow_ups",
@@ -42,9 +42,9 @@ const TRANSITIONS = Object.freeze({
     "audit_failed",
     "audit_invalid",
   ],
-  audit_failed: ["auditing", "developing", "audit_invalid"],
-  audit_invalid: ["developing"],
-  changes_required: ["developing"],
+  audit_failed: ["auditing", "developing", "audit_invalid", "blocked"],
+  audit_invalid: ["developing", "blocked"],
+  changes_required: ["developing", "blocked"],
   blocked: ["developing"],
   approved_with_follow_ups: ["developing", "committed"],
   approved: ["developing", "committed"],
@@ -147,6 +147,13 @@ export function createInitialState({ taskId, baseRef, baseCommit, branch }) {
     branch,
     implementationFingerprint: null,
     approvedFingerprint: null,
+    architecture: {
+      preparation: null,
+      postDevelopment: null,
+      repair: null,
+      completion: null,
+      lastError: null,
+    },
     development: {
       attempt: 0,
       startedAt: null,
@@ -282,9 +289,6 @@ export function implementationFingerprint(root, baseCommit) {
   const hash = createHash("sha256");
   hash.update(`base:${baseCommit}\0`);
 
-  // Hash the resulting implementation snapshot rather than a patch encoding.
-  // Include base paths so committed deletions remain represented as missing files.
-  // This keeps the fingerprint stable across untracked, staged, and committed states.
   const files = [
     ...new Set([
       ...listBaseFiles(root, baseCommit),
