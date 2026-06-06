@@ -1,17 +1,36 @@
 # Autonomous Single-Task Runner
 
-`scaflow-run` drives one approved Task Contract through development, verification, independent audit, repair, and re-audit without manual handoff between Codex sessions.
+`scaflow-run` drives one approved Task Contract through an Architect-led, Controller-enforced workflow without manual handoff between Codex sessions.
 
 It is a bootstrap runner for the current repository workflow. It is not the final Scaflow Task Execution Orchestrator defined by SFL-034.
 
+## Agent team
+
+The deterministic Controller invokes:
+
+```text
+Architect preparation
+-> Developer implementation and Task Gate
+-> Architect post-development review
+-> independent Auditor
+-> Architect repair brief when needed
+-> Developer repair and full Task Gate
+-> independent re-audit
+-> Architect completion summary
+```
+
+The Controller owns state, retries, implementation fingerprints, locks, and stop conditions. Agents do not invoke Controller commands or perform Git delivery actions.
+
 ## Default target
 
-The runner stops successfully when the workflow reaches either:
+The runner stops successfully when the workflow reaches:
 
 ```text
 approved
 approved_with_follow_ups
 ```
+
+and the Architect completion summary has been generated.
 
 It does not automatically:
 
@@ -20,67 +39,108 @@ It does not automatically:
 - create or merge a pull request;
 - update the shared Task Contract to `definition_state: completed`.
 
-These boundaries preserve the distinction between implementation approval, delivery, merge, and shared Task completion.
-
 ## Usage
 
 ```bash
-pnpm scaflow-run SFL-001 --base origin/main
+pnpm scaflow-run SFL-001 --base origin/dev
 ```
 
 Full form:
 
 ```bash
 pnpm scaflow-run SFL-001 \
-  --base origin/main \
+  --base origin/dev \
   --until approved \
   --max-development-attempts 3 \
   --max-audit-rounds 4 \
   --max-same-failure 2
 ```
 
-Preview the next action without changing state or starting Codex:
+Preview the current state without starting an Agent:
 
 ```bash
-pnpm scaflow-run SFL-001 --base origin/main --dry-run
+pnpm scaflow-run SFL-001 --base origin/dev --dry-run
 ```
 
 ## Automatic loop
 
 ```text
-ready without implementation
+ready
+  -> Architect preparation
+  -> READY_FOR_DEVELOPMENT
   -> Developer
-  -> ready_for_audit
-  -> Auditor
-
-ready with an existing implementation
-  -> import existing implementation
-  -> Auditor
-
-changes_required
-  -> Developer repair
   -> complete Task Gate
-  -> Auditor again
+  -> ready_for_audit
+  -> Architect post-development review
 
-audit_failed
-  -> Auditor retry
+Architect post-development review
+  -> READY_FOR_AUDIT -> independent Auditor
+  -> REPAIR_REQUIRED -> changes_required
+  -> BLOCKED -> stop
 
-audit_invalid
-  -> Developer repair / Gate refresh
-  -> Auditor again
+Auditor
+  -> APPROVED -> Architect completion summary -> success
+  -> APPROVED_WITH_FOLLOW_UPS -> Architect completion summary -> success
+  -> CHANGES_REQUIRED -> Architect repair brief -> Developer repair
+  -> BLOCKED -> stop
 
-approved / approved_with_follow_ups
-  -> success
-
-blocked
-  -> stop safely
+Developer repair
+  -> complete Task Gate again
+  -> Architect post-development review again
+  -> independent re-audit
 ```
 
-The Developer runs through non-interactive `codex exec` in `workspace-write` mode. The Auditor continues to run through non-interactive `codex exec` in `read-only` mode.
+For an existing implementation in a `ready` workflow:
+
+```text
+Architect preparation
+-> import existing implementation fingerprint
+-> Architect post-development review
+-> independent Auditor
+```
+
+## Architect decisions
+
+### Preparation
+
+```text
+READY_FOR_DEVELOPMENT
+BLOCKED
+```
+
+### Post-development
+
+```text
+READY_FOR_AUDIT
+REPAIR_REQUIRED
+BLOCKED
+```
+
+### Repair
+
+```text
+READY_FOR_REPAIR
+BLOCKED
+```
+
+### Completion
+
+```text
+COMPLETE
+```
+
+Every Architect response is validated as one strict JSON object before the Controller acts on it. Malformed output stops the run.
+
+## Agent permissions
+
+- Architect: `read-only`.
+- Developer: `workspace-write`, limited by the Task Contract.
+- Auditor: `read-only`.
+- Controller: state, process, worktree, and delivery authority.
+
+Architect does not implement code or issue audit verdicts. Auditor treats Architect briefs as untrusted guidance and independently verifies the implementation.
 
 ## Safety limits
-
-The runner applies three independent limits:
 
 ### Development attempts
 
@@ -88,7 +148,7 @@ The runner applies three independent limits:
 --max-development-attempts 3
 ```
 
-Counts all development attempts already recorded in local workflow state, including attempts performed before the current autonomous run.
+Counts all development attempts already recorded in workflow state.
 
 ### Audit rounds
 
@@ -104,108 +164,89 @@ Counts all audit rounds already recorded for the task.
 --max-same-failure 2
 ```
 
-Stops when the same recorded failure repeats without material progress. Development-attempt and audit-round limits remain the final protection against non-identical failure loops.
+Stops when the same failure repeats without material progress. Architect errors, Developer errors, Auditor findings, and report hashes participate in failure identification.
 
-The runner always stops immediately when the Auditor returns `BLOCKED`.
+The runner stops immediately for an Architect or Auditor `BLOCKED` decision.
 
 ## Concurrency lock
 
-Only one autonomous runner may control a task at a time.
+Only one autonomous runner may control a task at a time:
 
 ```text
 .scaflow/handoffs/<task-id>/run.lock
 ```
 
-The lock records the process ID. A live lock prevents another runner from starting. A stale lock whose process no longer exists is recovered automatically.
+A stale lock is recovered only when its recorded process no longer exists.
 
-## Run evidence
-
-The runner writes:
+## Evidence
 
 ```text
-.scaflow/handoffs/<task-id>/run-state.json
-.scaflow/handoffs/<task-id>/run-summary.md
+.scaflow/handoffs/<task-id>/
+├── architect/
+│   ├── preparation.json
+│   ├── preparation.md
+│   ├── post-development-attempt-N.json
+│   ├── post-development-attempt-N.md
+│   ├── repair-round-N.json
+│   ├── repair-round-N.md
+│   ├── completion.json
+│   └── completion.md
+├── developer-report.md
+├── audit-round-N.md
+├── audit-round-N.json
+├── run-state.json
+├── run-summary.md
+├── state.json
+└── events.jsonl
 ```
 
-The state file records:
-
-- frozen base ref and commit;
-- task branch;
-- configured limits;
-- development-attempt and audit-round counts;
-- each executed action and result state;
-- final status and stop reason.
-
-Developer and Auditor evidence remains in the normal handoff files:
-
-```text
-developer-report.md
-audit-round-N.md
-audit-round-N.json
-state.json
-events.jsonl
-```
+Architect JSON is the machine decision. Architect Markdown is rendered deterministically for human review.
 
 ## Exit behavior
 
 Exit code `0`:
 
-- `approved`;
-- `approved_with_follow_ups`;
-- task was already in a later delivered state.
+- independent audit approved the implementation;
+- Architect completion summary exists;
+- or the task was already in a later delivered state.
 
 Non-zero exit:
 
-- `BLOCKED`;
-- retry limit reached;
-- repeated failure;
-- active developer or auditor process already owns the workflow;
-- invalid branch, base, contract, or environment;
-- unexpected execution failure.
+- Architect or Auditor returned `BLOCKED`;
+- an Architect response was malformed;
+- retry limit was reached;
+- the same failure repeated;
+- an active Developer or Auditor process already owns the workflow;
+- branch, base, contract, or environment is invalid;
+- unexpected execution failure occurred.
 
-Always inspect `run-summary.md` after a non-zero exit.
+Inspect:
 
-## Current-task migration
-
-For an implementation created before `scaflow-run` existed, start it on the same dedicated task branch:
-
-```bash
-pnpm scaflow-run SFL-001 --base origin/main
+```text
+.scaflow/handoffs/<task-id>/run-summary.md
 ```
-
-When the workflow is still `ready` but changes already exist relative to the frozen base, the runner sends the implementation directly to `scaflow-audit`. The audit command records the legacy import as `LEGACY_DEVELOPMENT_IMPORTED` before starting the read-only review.
 
 ## After success
 
-Inspect status:
-
-```bash
-pnpm scaflow-status SFL-001
-```
-
-Then perform delivery explicitly:
+For manual single-task delivery:
 
 ```bash
 git add .
-git commit -m "build: implement SFL-001 engine monorepo foundation"
+git commit -m "feat: implement SFL-001"
 pnpm scaflow-status SFL-001 --mark committed
-
-git push -u origin SFL-001-engine-monorepo-foundation
-pnpm scaflow-status SFL-001 --mark pushed
 ```
 
-After merge:
+For sequential task delivery to `dev`, use:
 
 ```bash
-git fetch origin
-pnpm scaflow-status SFL-001 --base origin/main --mark merged
+pnpm scaflow-batch 2-6
 ```
 
-Only after merge should a separate controlled change update the shared Task Contract to `definition_state: completed`.
+The batch Controller invokes this same three-Agent workflow for every task before committing and integrating it.
 
 ## Bootstrap limitations
 
-- The runner operates in the current dedicated task branch, not yet in a formal `workspace/runs/` TaskRun Bundle.
-- It does not automatically recover a workflow left in `developing` or `auditing`; an active-state workflow stops for inspection.
-- It does not automatically commit, push, merge, or resolve `BLOCKED` findings.
-- The final SFL-034 Orchestrator will replace this bootstrap script while preserving the same state and safety semantics.
+- The runner operates in the current dedicated task branch.
+- It does not automatically recover a workflow left in `developing` or `auditing`.
+- It does not commit, push, merge, or resolve a true `BLOCKED` decision.
+- The final SFL-034 Orchestrator will replace this bootstrap script while preserving the same role and state boundaries.
