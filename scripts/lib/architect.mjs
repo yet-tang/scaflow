@@ -145,6 +145,7 @@ export function buildArchitectPrompt({
     `- Frozen base: ${baseRef}@${baseCommit}`,
     `- Task branch: ${branch}`,
     `- Current workflow state: ${workflowState}`,
+    "- Prior task completion summaries when available: .scaflow/context/completions/",
     developerReportPath ? `- Developer report: ${developerReportPath}` : "- Developer report: not present",
     latestAuditReportPath ? `- Latest audit report: ${latestAuditReportPath}` : "- Latest audit report: not present",
     preparationPath ? `- Preparation brief: ${preparationPath}` : "- Preparation brief: not present",
