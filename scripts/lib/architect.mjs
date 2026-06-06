@@ -70,7 +70,7 @@ export function parseArchitectDecision(content, { taskId, phase }) {
   };
 }
 
-export function architectArtifactPaths(handoffDirectory, phase, sequence = 1) {
+export function architectArtifactPaths(handoffDirectory, taskId, phase, sequence = 1) {
   const directory = join(handoffDirectory, "architect");
   const stem = phase === ARCHITECT_PHASES.PREPARATION
     ? "preparation"
@@ -83,8 +83,8 @@ export function architectArtifactPaths(handoffDirectory, phase, sequence = 1) {
     directory,
     json: join(directory, `${stem}.json`),
     markdown: join(directory, `${stem}.md`),
-    relativeJson: join(".scaflow", "handoffs", "__TASK_ID__", "architect", `${stem}.json`),
-    relativeMarkdown: join(".scaflow", "handoffs", "__TASK_ID__", "architect", `${stem}.md`),
+    relativeJson: join(".scaflow", "handoffs", taskId, "architect", `${stem}.json`),
+    relativeMarkdown: join(".scaflow", "handoffs", taskId, "architect", `${stem}.md`),
   };
 }
 
