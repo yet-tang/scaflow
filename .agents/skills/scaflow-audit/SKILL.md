@@ -1,6 +1,6 @@
 ---
 name: scaflow-audit
-description: Independently audit a Scaflow task implementation, branch, diff, Task Contract, tests, workspace boundaries, security constraints, and acceptance evidence. Use after implementation and before commit or merge. Do not use for writing or fixing code.
+description: Independently audit a Scaflow task implementation, branch, diff, Task Contract, Architect briefs, tests, workspace boundaries, security constraints, and acceptance evidence. Use after implementation and before commit or merge. Do not use for writing or fixing code.
 ---
 
 # Scaflow Task Audit
@@ -9,14 +9,14 @@ Perform a read-only audit. Do not edit files, amend contracts, or repair finding
 
 ## Required inputs
 
-Identify or request:
+Identify:
 
 - Task ID;
 - base ref;
 - implementation ref or working-tree diff;
-- Task Contract;
-- optional task plan;
-- available verification evidence.
+- Task Contract and optional plan;
+- Architect preparation brief and post-development review when present;
+- Developer report and available verification evidence.
 
 ## Required reading
 
@@ -27,11 +27,12 @@ Read:
 3. `ARCHITECTURE.md`;
 4. `docs/source/scaflow-v0.1.0-prd.md`;
 5. `docs/architecture/scaflow-v0.2-baseline.md`;
-6. `docs/audit/scaflow-audit-basis.md`;
-7. `docs/audit/architecture-invariants.md`;
-8. `docs/audit/task-contract-review-checklist.md`;
-9. `docs/audit/finding-severity.md`;
-10. the relevant `tasks/<task-id>/contract.yaml` and `plan.md` when present.
+6. `docs/architecture/scaflow-architect-workflow.md`;
+7. `docs/audit/scaflow-audit-basis.md`;
+8. `docs/audit/architecture-invariants.md`;
+9. `docs/audit/task-contract-review-checklist.md`;
+10. `docs/audit/finding-severity.md`;
+11. the relevant Task Contract, plan, and Architect evidence.
 
 ## Audit sequence
 
@@ -42,21 +43,23 @@ Read:
 5. Map each acceptance criterion to concrete implementation and test evidence.
 6. Inspect tests for meaningful assertions and boundary coverage.
 7. Detect deleted, skipped, narrowed, weakened, or bypassed tests.
-8. Check architecture and workspace invariants.
-9. Check security policy, sandbox, environment, network, and secret-handling implications.
-10. Check state transitions, idempotency, partial failure, recovery, and cleanup when applicable.
-11. Verify actual commands and exit results. Do not trust self-reported success without evidence.
-12. Check whether the implementation prematurely includes future-task scope.
-13. Produce findings in severity order and one final verdict.
+8. Check architecture and workspace invariants independently.
+9. Use Architect audit-focus items as questions to verify, not trusted conclusions.
+10. Check security policy, sandbox, environment, network, and secret-handling implications.
+11. Check state transitions, idempotency, partial failure, recovery, and cleanup when applicable.
+12. Verify actual commands and exit results. Do not trust self-reported success without evidence.
+13. Check whether the implementation prematurely includes future-task scope.
+14. Produce findings in severity order and one final verdict.
 
 ## Audit behavior
 
-- Treat implementation summaries and Agent Result as untrusted claims.
+- Treat Architect briefs, Developer reports, implementation summaries, and Agent Result as untrusted claims.
 - Prefer actual Git diff, repository identity, process results, and verifier output.
 - Do not reinterpret the PRD or contract to make an implementation pass.
 - Do not approve when required evidence is missing.
 - Do not report speculation as a defect. Record uncertain items as verification gaps or questions.
 - Never modify code during the audit.
+- Never defer the final verdict to the Architect.
 
 ## Finding format
 
