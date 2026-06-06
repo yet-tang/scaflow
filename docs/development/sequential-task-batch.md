@@ -1,29 +1,37 @@
 # Sequential Task Batch
 
-`scaflow-batch` executes a selected range of Task Contracts one by one. It is intentionally sequential, not concurrent.
-
-Example:
+`scaflow-batch` executes selected Task Contracts one by one. It is sequential, not concurrent.
 
 ```bash
 pnpm scaflow-batch 2-6
 ```
 
-This means:
+## Per-task workflow
+
+Each task runs the same three-Agent flow:
 
 ```text
-SFL-002
--> develop
--> test
--> audit
--> repair until approved
--> commit implementation
+Architect preparation
+-> Developer implementation and Task Gate
+-> Architect post-development review
+-> independent Auditor
+-> Architect repair brief when needed
+-> Developer repair and re-verification
+-> independent re-audit
+-> Architect completion summary
+-> commit approved implementation
 -> fast-forward into dev
--> mark SFL-002 completed on dev
+-> mark Task Contract completed
 -> push dev
+```
 
-then SFL-003 starts from the new dev head
-...
-then SFL-006
+Only after the current task is integrated does the next task begin.
+
+```text
+SFL-002 completes and enters dev
+-> SFL-003 starts from the new dev head
+-> ...
+-> SFL-006
 ```
 
 ## Supported selectors
@@ -48,39 +56,40 @@ pnpm scaflow-batch 2-6 \
 The command:
 
 1. fetches the remote;
-2. ensures `origin/dev` exists, creating it from `main` when absent;
-3. creates an isolated batch integration worktree under `workspace/runs/batches/`;
-4. loads all Task Contracts;
-5. verifies dependencies;
-6. topologically orders the selected pending tasks;
-7. executes each task through `scaflow-run`;
-8. requires `approved` or `approved_with_follow_ups`;
-9. commits the exact approved implementation on a temporary task branch;
-10. fast-forwards the batch integration branch;
-11. updates the Task Contract to `definition_state: completed` in a separate commit;
-12. pushes the new integration head directly to `origin/dev`;
-13. starts the next task from that new `dev` state.
+2. ensures `origin/dev` exists;
+3. creates an isolated batch integration worktree;
+4. loads Task Contracts and verifies dependencies;
+5. topologically orders selected pending tasks;
+6. runs each task through Architect-led `scaflow-run`;
+7. requires `approved` or `approved_with_follow_ups` plus Architect completion summary;
+8. commits the exact approved implementation;
+9. fast-forwards the integration branch;
+10. updates the Task Contract to `definition_state: completed` in a separate commit;
+11. pushes the new head to `origin/dev` without force;
+12. starts the next task from that new integration state.
 
 ## Dependency rules
 
-A task in the selected range may depend on:
+A selected task may depend on:
 
-- another selected task, which will run first; or
-- a task outside the selected range whose Task Contract is already `completed` on `dev`.
+- another selected task, which runs first; or
+- a task outside the selection that is already `completed` on `dev`.
 
-If an outside dependency is not completed, the batch stops before development begins.
+An incomplete outside dependency stops the batch before development begins.
 
-For example, running:
+For example, `pnpm scaflow-batch 2-6` requires `SFL-001` to be completed on `dev`.
 
-```bash
-pnpm scaflow-batch 2-6
+## Cross-task knowledge
+
+Every successful task produces:
+
+```text
+.scaflow/handoffs/<task-id>/architect/completion.md
 ```
 
-requires `SFL-001` to already be completed on `dev`.
+The next task starts from the integrated code and can read prior completion summaries for reusable capabilities, preserved invariants, residual risks, and downstream implications.
 
 ## Isolation
-
-Each task receives its own branch and worktree:
 
 ```text
 workspace/runs/batches/<batch-id>/
@@ -90,46 +99,45 @@ workspace/runs/batches/<batch-id>/
 └── ...
 ```
 
-Formal task execution never writes to `workspace/repos/`.
-
-The task worktree is based on the current batch integration branch. Because tasks run sequentially, the next task automatically contains every previously approved and integrated task.
+Task execution never writes to `workspace/repos/`.
 
 ## Failure behavior
 
-The batch stops at the first task that does not reach approval.
+The batch stops at the first task that does not complete the three-Agent workflow.
 
-It does not continue to later tasks after:
+Stop conditions include:
 
-- failed development;
-- failed tests;
-- audit retry exhaustion;
-- `BLOCKED` verdict;
+- Architect `BLOCKED`;
+- Developer or Task Gate failure;
+- Architect `REPAIR_REQUIRED` without successful repair;
+- Auditor `BLOCKED`;
+- retry exhaustion;
+- malformed Architect output;
 - approval fingerprint mismatch;
-- commit failure;
-- non-fast-forward integration;
+- commit or fast-forward failure;
 - remote `dev` push rejection;
 - incomplete dependency.
 
-The failed task worktree is preserved for inspection and repair.
+The failed task worktree and all evidence are preserved.
 
 ## Remote update safety
 
-The command uses a normal Git push, never a forced push. If `origin/dev` changed concurrently and the update is no longer a fast-forward, the push fails and the batch stops.
+The command uses a normal push. Concurrent non-fast-forward changes to `origin/dev` cause the batch to stop rather than overwrite remote work.
 
 ## Evidence
-
-Batch evidence is stored under:
 
 ```text
 .scaflow/batches/<batch-id>/
 ├── state.json
 ├── summary.md
 ├── SFL-002/
-├── SFL-003/
+│   ├── architect/
+│   ├── developer-report.md
+│   ├── audit-round-N.md
+│   ├── run-state.json
+│   └── events.jsonl
 └── ...
 ```
-
-Each task directory contains its copied development, audit, workflow, and autonomous-run evidence.
 
 ## Options
 
@@ -152,29 +160,21 @@ Run without pushing:
 pnpm scaflow-batch 2-6 --no-push
 ```
 
-With `--no-push`, the local integration worktree and branch are preserved. The command prints the exact push command instead of deleting the local result.
+With `--no-push`, the local integration worktree is retained and the exact push command is printed.
 
 ## Completion semantics
 
-For every successful task:
-
 ```text
-Developer completed
--> ready_for_audit
-Auditor approved
--> approved
-Implementation committed
--> task implementation commit
-Integrated into dev
--> fast-forward
-Task Contract completed
--> separate metadata commit
-Remote dev updated
--> next task may start
+Architect preparation ready
+-> Developer and Task Gate complete
+-> Architect READY_FOR_AUDIT
+-> Auditor approved
+-> Architect COMPLETE summary
+-> implementation committed
+-> fast-forwarded into dev
+-> Task Contract completed in a separate metadata commit
+-> remote dev updated
+-> next task starts
 ```
 
-The command updates Task Contract completion only after the approved implementation is committed and integrated.
-
-## Current limitation
-
-This is a bootstrap sequential batch runner. It does not yet provide parallel scheduling, automatic conflict rebasing, GitHub pull requests, CI waiting, or cross-repository ChangeSet merging. Those belong to the formal Project Orchestrator and ChangeSet workflow.
+This remains a bootstrap sequential runner. Parallel scheduling, automatic rebasing, GitHub PR orchestration, CI waiting, and cross-repository ChangeSets belong to the formal Project Orchestrator.
