@@ -1,0 +1,3 @@
+#!/usr/bin/env node
+
+await import(new URL("../lib/codex-console-shim.mjs", import.meta.url));
