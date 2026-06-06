@@ -10,7 +10,8 @@
   "bin": {
     "scaflow-dev": "./scripts/scaflow-dev.mjs",
     "scaflow-audit": "./scripts/scaflow-audit.mjs",
-    "scaflow-status": "./scripts/scaflow-status.mjs"
+    "scaflow-status": "./scripts/scaflow-status.mjs",
+    "scaflow-run": "./scripts/scaflow-run.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.32",
@@ -20,11 +21,12 @@
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm test:workflow && pnpm -r test",
-    "test:workflow": "node --test scripts/lib/workflow-state.test.mjs",
+    "test:workflow": "node --test scripts/lib/*.test.mjs",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",
     "scaflow-dev": "node scripts/scaflow-dev.mjs",
     "scaflow-audit": "node scripts/scaflow-audit.mjs",
-    "scaflow-status": "node scripts/scaflow-status.mjs"
+    "scaflow-status": "node scripts/scaflow-status.mjs",
+    "scaflow-run": "node scripts/scaflow-run.mjs"
   }
 }
