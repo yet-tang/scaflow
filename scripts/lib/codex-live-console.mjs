@@ -55,6 +55,7 @@ function duration(startedAt) {
 const options = parseArgs(process.argv.slice(2));
 const prefix = consolePrefix(options);
 const startedAt = Date.now();
+const codexExecutable = process.env.SCAFLOW_REAL_CODEX || "codex";
 if (options.eventsPath) mkdirSync(dirname(options.eventsPath), { recursive: true });
 
 function persist(payload) {
@@ -75,7 +76,7 @@ function print(message) {
 print("╭─ Started");
 persist({ kind: "console.started", level: options.level });
 
-const child = spawn("codex", addJsonFlag(options.codexArgs), {
+const child = spawn(codexExecutable, addJsonFlag(options.codexArgs), {
   cwd: process.cwd(),
   env: process.env,
   stdio: ["inherit", "pipe", "pipe"],
