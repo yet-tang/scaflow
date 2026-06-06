@@ -11,7 +11,8 @@
     "scaflow-dev": "./scripts/scaflow-dev.mjs",
     "scaflow-audit": "./scripts/scaflow-audit.mjs",
     "scaflow-status": "./scripts/scaflow-status.mjs",
-    "scaflow-run": "./scripts/scaflow-run.mjs"
+    "scaflow-run": "./scripts/scaflow-run.mjs",
+    "scaflow-batch": "./scripts/scaflow-batch.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.32",
@@ -27,6 +28,7 @@
     "scaflow-dev": "node scripts/scaflow-dev.mjs",
     "scaflow-audit": "node scripts/scaflow-audit.mjs",
     "scaflow-status": "node scripts/scaflow-status.mjs",
-    "scaflow-run": "node scripts/scaflow-run.mjs"
+    "scaflow-run": "node scripts/scaflow-run.mjs",
+    "scaflow-batch": "node scripts/scaflow-batch.mjs"
   }
 }
