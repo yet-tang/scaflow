@@ -21,6 +21,34 @@ export function parseTaskContract(content, source = "contract.yaml") {
   return { id, title, definitionState, dependencies, source };
 }
 
+function formatTaskId(number) {
+  if (!Number.isInteger(number) || number < 1 || number > 999) {
+    throw new Error(`task number must be between 1 and 999: ${number}`);
+  }
+  return `SFL-${String(number).padStart(3, "0")}`;
+}
+
+function parseTaskNumber(value) {
+  const match = /^(?:SFL-)?(\d{1,3})$/i.exec(value.trim());
+  if (!match) throw new Error(`invalid task selector item: ${value}`);
+  return Number(match[1]);
+}
+
+export function parseTaskSelection(selector) {
+  const value = selector.trim();
+  if (!value) throw new Error("task selector is required");
+
+  const rangeMatch = /^(?:SFL-)?(\d{1,3})\s*(?:-|\.\.)\s*(?:SFL-)?(\d{1,3})$/i.exec(value);
+  if (rangeMatch) {
+    const start = Number(rangeMatch[1]);
+    const end = Number(rangeMatch[2]);
+    if (start > end) throw new Error(`task range must be ascending: ${selector}`);
+    return Array.from({ length: end - start + 1 }, (_, index) => formatTaskId(start + index));
+  }
+
+  return [...new Set(value.split(",").map(parseTaskNumber).map(formatTaskId))].sort();
+}
+
 export function topologicalTaskOrder(contracts, selectedIds) {
   const byId = new Map(contracts.map((contract) => [contract.id, contract]));
   const selected = new Set(selectedIds);
@@ -62,9 +90,7 @@ export function topologicalTaskOrder(contracts, selectedIds) {
     }
   }
 
-  if (ordered.length !== selected.size) {
-    throw new Error("Task dependency cycle detected");
-  }
+  if (ordered.length !== selected.size) throw new Error("Task dependency cycle detected");
   return ordered;
 }
 
