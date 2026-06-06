@@ -40,6 +40,25 @@ Development requirements:
 - Hand completed implementation to the independent Auditor.
 - Use `scaflow-status` to inspect the bootstrap workflow state and record verified delivery transitions.
 
+## Autonomous single-task execution
+
+For unattended execution of one approved Task Contract, use:
+
+```bash
+pnpm scaflow-run <TASK-ID> --base <ref>
+```
+
+Read `docs/development/autonomous-task-runner.md` before changing the autonomous loop.
+
+Autonomous-run requirements:
+
+- The runner may automate Developer, Task Gate, Auditor, repair, and re-audit only.
+- The default success target is `approved` or `approved_with_follow_ups`.
+- The runner must not commit, push, create or merge a PR, or update the shared Task Contract.
+- `BLOCKED`, retry exhaustion, repeated failure, or an already-active workflow must stop the runner.
+- Only one autonomous runner may own a task at a time.
+- Preserve all normal workspace, scope, security, state, and audit invariants.
+
 ## Bootstrap workflow semantics
 
 - Development completion means `ready_for_audit`, not Task completion.
