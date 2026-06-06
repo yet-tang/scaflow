@@ -14,8 +14,13 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import process from "node:process";
 import {
-  AUTONOMOUS_ACTIONS,
-  decideAutonomousAction,
+  ARCHITECT_PHASES,
+  architectArtifactPaths,
+  buildArchitectPrompt,
+  parseArchitectDecision,
+  writeArchitectArtifacts,
+} from "./lib/architect.mjs";
+import {
   isFailureState,
   updateFailureTracker,
   validatePositiveInteger,
@@ -24,6 +29,7 @@ import {
   currentBranch,
   implementationFingerprint,
   implementationHasChanges,
+  patchWorkflowState,
   readWorkflowState,
   resolveGitRef,
   transitionWorkflowState,
@@ -84,7 +90,7 @@ function parseArgs(argv) {
       continue;
     }
     if (arg === "--help" || arg === "-h") {
-      console.log(`Usage: scaflow-run <TASK-ID> [options]\n\nOptions:\n  --base <ref>                      Frozen base ref (default: main)\n  --until approved                  Stop after independent approval\n  --max-development-attempts <n>    Default: 3\n  --max-audit-rounds <n>            Default: 4\n  --max-same-failure <n>            Default: 2\n  --dry-run                         Show the next autonomous action\n\nExample:\n  scaflow-run SFL-001 --base origin/main\n`);
+      console.log(`Usage: scaflow-run <TASK-ID> [options]\n\nOptions:\n  --base <ref>                      Frozen base ref (default: main)\n  --until approved                  Stop after independent approval\n  --max-development-attempts <n>    Default: 3\n  --max-audit-rounds <n>            Default: 4\n  --max-same-failure <n>            Default: 2\n  --dry-run                         Show the next autonomous action\n\nExample:\n  scaflow-run SFL-001 --base origin/dev\n`);
       process.exit(0);
     }
     if (arg.startsWith("-")) fail(`unknown option: ${arg}`);
@@ -157,8 +163,274 @@ function releaseLock(path) {
   if (existsSync(path)) unlinkSync(path);
 }
 
-function buildDeveloperPrompt({ taskId, baseRef, baseCommit, contractPath, reportPath, resume }) {
-  return `Use the scaflow-developer custom agent and the scaflow-development Skill.\n\nImplement exactly ${taskId}.\n\nInputs:\n- Task Contract: ${contractPath}\n- Base ref: ${baseRef}\n- Resolved base commit: ${baseCommit}\n- Current branch and working tree are the implementation target.\n- The wrapper captures your final response as ${reportPath}.\n\nMandatory behavior:\n1. Perform the complete preflight from docs/development/scaflow-development-workflow.md.\n2. Preserve unrelated changes and stop if they overlap the task.\n3. Implement only ${taskId}; do not implement future tasks.\n4. Run every Task Contract verification command, git diff --check, and git status --short.\n5. Perform developer self-review against the actual diff.\n6. Return the complete developer report as the final response. Do not write the report file yourself.\n7. Do not commit, push, create a pull request, or mark the shared Task completed.\n${resume ? "8. This is a repair round. Read prior audit reports and fix only current findings.\n" : ""}`;
+function architectureStateKey(phase) {
+  return {
+    [ARCHITECT_PHASES.PREPARATION]: "preparation",
+    [ARCHITECT_PHASES.POST_DEVELOPMENT]: "postDevelopment",
+    [ARCHITECT_PHASES.REPAIR]: "repair",
+    [ARCHITECT_PHASES.COMPLETION]: "completion",
+  }[phase];
+}
+
+function latestAuditPath(state) {
+  return state.audit?.report ?? null;
+}
+
+function invokeArchitect({
+  root,
+  taskId,
+  phase,
+  sequence,
+  baseRef,
+  baseCommit,
+  branch,
+  contractPath,
+  planPath,
+  state,
+  paths,
+}) {
+  const artifacts = architectArtifactPaths(paths.directory, taskId, phase, sequence);
+  mkdirSync(artifacts.directory, { recursive: true });
+  const rawPath = join(artifacts.directory, `.raw-${phase}-${sequence}-${process.pid}.json`);
+  const prompt = buildArchitectPrompt({
+    taskId,
+    phase,
+    baseRef,
+    baseCommit,
+    branch,
+    contractPath,
+    planPath,
+    workflowState: state.workflowState,
+    developerReportPath: state.development?.report ?? null,
+    latestAuditReportPath: latestAuditPath(state),
+    preparationPath: state.architecture?.preparation?.report ?? null,
+    postDevelopmentPath: state.architecture?.postDevelopment?.report ?? null,
+  });
+
+  const result = run("codex", [
+    "exec",
+    "-C",
+    root,
+    "-s",
+    "read-only",
+    "--output-last-message",
+    rawPath,
+    prompt,
+  ]);
+  if (result.status !== 0) {
+    throw new Error(`Architect ${phase} phase exited with code ${result.status}`);
+  }
+  if (!existsSync(rawPath) || readFileSync(rawPath, "utf8").trim().length === 0) {
+    throw new Error(`Architect ${phase} phase produced no output`);
+  }
+
+  const decision = parseArchitectDecision(readFileSync(rawPath, "utf8"), { taskId, phase });
+  unlinkSync(rawPath);
+  writeArchitectArtifacts(artifacts, decision);
+
+  const key = architectureStateKey(phase);
+  const fingerprint = state.implementationFingerprint ?? null;
+  patchWorkflowState({
+    root,
+    taskId,
+    defaults: { baseRef, baseCommit, branch },
+    event: `ARCHITECT_${phase.toUpperCase()}_${decision.decision}`,
+    patch: {
+      architecture: {
+        [key]: {
+          decision: decision.decision,
+          report: artifacts.relativeMarkdown,
+          json: artifacts.relativeJson,
+          sequence,
+          fingerprint,
+          at: new Date().toISOString(),
+        },
+        lastError: null,
+      },
+    },
+    metadata: {
+      phase,
+      decision: decision.decision,
+      report: artifacts.relativeMarkdown,
+      fingerprint,
+    },
+  });
+
+  return { decision, artifacts };
+}
+
+function transitionArchitectBlocked({ root, taskId, defaults, phase, decision }) {
+  transitionWorkflowState({
+    root,
+    taskId,
+    defaults,
+    to: "blocked",
+    event: `ARCHITECT_${phase.toUpperCase()}_BLOCKED`,
+    patch: {
+      architecture: {
+        lastError: decision.blockingIssues.join("; "),
+      },
+    },
+    metadata: {
+      phase,
+      blockingIssues: decision.blockingIssues,
+    },
+  });
+}
+
+function ensurePreparation(context, state, paths) {
+  if (
+    state.architecture?.preparation?.decision === "READY_FOR_DEVELOPMENT" &&
+    state.architecture.preparation.baseCommit === context.baseCommit
+  ) {
+    return { reused: true, decision: "READY_FOR_DEVELOPMENT" };
+  }
+
+  const result = invokeArchitect({
+    ...context,
+    phase: ARCHITECT_PHASES.PREPARATION,
+    sequence: 1,
+    state,
+    paths,
+  });
+  patchWorkflowState({
+    root: context.root,
+    taskId: context.taskId,
+    defaults: context.defaults,
+    event: "ARCHITECT_PREPARATION_BASE_RECORDED",
+    patch: {
+      architecture: {
+        preparation: {
+          baseCommit: context.baseCommit,
+        },
+      },
+    },
+  });
+
+  if (result.decision.decision === "BLOCKED") {
+    transitionArchitectBlocked({
+      root: context.root,
+      taskId: context.taskId,
+      defaults: context.defaults,
+      phase: ARCHITECT_PHASES.PREPARATION,
+      decision: result.decision,
+    });
+  }
+  return { reused: false, decision: result.decision.decision };
+}
+
+function ensureRepairBrief(context, state, paths) {
+  const sequence = Math.max(1, (state.audit?.round ?? 0) + (state.workflowState === "development_failed" ? 1 : 0));
+  const result = invokeArchitect({
+    ...context,
+    phase: ARCHITECT_PHASES.REPAIR,
+    sequence,
+    state,
+    paths,
+  });
+  if (result.decision.decision === "BLOCKED") {
+    transitionArchitectBlocked({
+      root: context.root,
+      taskId: context.taskId,
+      defaults: context.defaults,
+      phase: ARCHITECT_PHASES.REPAIR,
+      decision: result.decision,
+    });
+  }
+  return result.decision.decision;
+}
+
+function ensurePostDevelopmentReview(context, state, paths) {
+  const current = state.architecture?.postDevelopment;
+  if (
+    current?.fingerprint &&
+    current.fingerprint === state.implementationFingerprint &&
+    current.decision === "READY_FOR_AUDIT"
+  ) {
+    return { reused: true, decision: "READY_FOR_AUDIT" };
+  }
+
+  const result = invokeArchitect({
+    ...context,
+    phase: ARCHITECT_PHASES.POST_DEVELOPMENT,
+    sequence: Math.max(1, state.development?.attempt ?? 1),
+    state,
+    paths,
+  });
+
+  if (result.decision.decision === "REPAIR_REQUIRED") {
+    transitionWorkflowState({
+      root: context.root,
+      taskId: context.taskId,
+      defaults: context.defaults,
+      to: "changes_required",
+      event: "ARCHITECT_POST_DEVELOPMENT_REPAIR_REQUIRED",
+      patch: {
+        audit: {
+          verdict: null,
+          lastError: "Architect requires in-scope repair before independent audit",
+        },
+      },
+      metadata: {
+        report: result.artifacts.relativeMarkdown,
+        implementationFingerprint: state.implementationFingerprint,
+      },
+    });
+  } else if (result.decision.decision === "BLOCKED") {
+    transitionArchitectBlocked({
+      root: context.root,
+      taskId: context.taskId,
+      defaults: context.defaults,
+      phase: ARCHITECT_PHASES.POST_DEVELOPMENT,
+      decision: result.decision,
+    });
+  }
+
+  return { reused: false, decision: result.decision.decision };
+}
+
+function ensureCompletionSummary(context, state, paths) {
+  if (
+    state.architecture?.completion?.decision === "COMPLETE" &&
+    state.architecture.completion.fingerprint === state.approvedFingerprint
+  ) {
+    return { reused: true, decision: "COMPLETE" };
+  }
+  const result = invokeArchitect({
+    ...context,
+    phase: ARCHITECT_PHASES.COMPLETION,
+    sequence: 1,
+    state,
+    paths,
+  });
+  patchWorkflowState({
+    root: context.root,
+    taskId: context.taskId,
+    defaults: context.defaults,
+    event: "ARCHITECT_COMPLETION_FINGERPRINT_RECORDED",
+    patch: {
+      architecture: {
+        completion: {
+          fingerprint: state.approvedFingerprint,
+        },
+      },
+    },
+  });
+  return { reused: false, decision: result.decision.decision };
+}
+
+function buildDeveloperPrompt({
+  taskId,
+  baseRef,
+  baseCommit,
+  contractPath,
+  reportPath,
+  resume,
+  preparationPath,
+  repairPath,
+  latestAuditReportPath,
+}) {
+  return `Use the scaflow-developer custom agent and the scaflow-development Skill.\n\nImplement exactly ${taskId}.\n\nInputs:\n- Task Contract: ${contractPath}\n- Base ref: ${baseRef}\n- Resolved base commit: ${baseCommit}\n- Current branch and working tree are the implementation target.\n- Architect preparation brief: ${preparationPath ?? "not present"}\n- Architect repair brief: ${repairPath ?? "not present"}\n- Latest independent audit report: ${latestAuditReportPath ?? "not present"}\n- The wrapper captures your final response as ${reportPath}.\n\nMandatory behavior:\n1. Perform the complete preflight from docs/development/scaflow-development-workflow.md.\n2. Follow Architect guidance only where it remains inside the Task Contract; the Task Contract and project baseline remain authoritative.\n3. Preserve unrelated changes and stop if they overlap the task.\n4. Implement only ${taskId}; do not implement future tasks.\n5. Run every Task Contract verification command, git diff --check, and git status --short.\n6. Perform developer self-review against the actual diff.\n7. Return the complete developer report as the final response. Do not write the report file yourself.\n8. Do not commit, push, create a pull request, or mark the shared Task completed.\n${resume ? "9. This is a repair round. Read the latest Architect repair brief and independent audit report, then fix only current in-scope findings.\n" : ""}`;
 }
 
 function executeDeveloper({ root, taskId, baseRef, baseCommit, contractPath, state, paths, resume }) {
@@ -173,6 +445,11 @@ function executeDeveloper({ root, taskId, baseRef, baseCommit, contractPath, sta
     patch: {
       implementationFingerprint: null,
       approvedFingerprint: null,
+      architecture: {
+        postDevelopment: null,
+        completion: null,
+        lastError: null,
+      },
       development: {
         attempt: (state.development?.attempt ?? 0) + 1,
         startedAt,
@@ -193,6 +470,9 @@ function executeDeveloper({ root, taskId, baseRef, baseCommit, contractPath, sta
     contractPath,
     reportPath,
     resume,
+    preparationPath: state.architecture?.preparation?.report ?? null,
+    repairPath: state.architecture?.repair?.report ?? null,
+    latestAuditReportPath: state.audit?.report ?? null,
   });
   const result = run("codex", [
     "exec",
@@ -278,6 +558,27 @@ function executeDeveloper({ root, taskId, baseRef, baseCommit, contractPath, sta
   return 0;
 }
 
+function importExistingImplementation({ root, taskId, defaults, state, baseCommit }) {
+  const fingerprint = implementationFingerprint(root, baseCommit);
+  transitionWorkflowState({
+    root,
+    taskId,
+    defaults,
+    to: "ready_for_audit",
+    event: "AUTONOMOUS_EXISTING_IMPLEMENTATION_IMPORTED",
+    patch: {
+      implementationFingerprint: fingerprint,
+      development: {
+        attempt: Math.max(1, state.development?.attempt ?? 0),
+        finishedAt: new Date().toISOString(),
+        imported: true,
+        lastError: null,
+      },
+    },
+    metadata: { implementationFingerprint: fingerprint },
+  });
+}
+
 function failureSignature(state, paths) {
   let reportHash = null;
   if (state.audit?.report) {
@@ -291,6 +592,8 @@ function failureSignature(state, paths) {
       state: state.workflowState,
       developerError: state.development?.lastError ?? null,
       auditError: state.audit?.lastError ?? null,
+      architectError: state.architecture?.lastError ?? null,
+      architectDecision: state.architecture?.repair?.decision ?? state.architecture?.postDevelopment?.decision ?? null,
       verdict: state.audit?.verdict ?? null,
       reportHash,
     }))
@@ -320,18 +623,39 @@ function writeRunFiles(paths, runState) {
   writeFileSync(join(paths.directory, "run-summary.md"), `${lines.join("\n")}\n`, "utf8");
 }
 
+function recordStep(runState, action, exitCode, resultState) {
+  runState.steps.push({
+    at: new Date().toISOString(),
+    action,
+    exitCode,
+    resultState,
+  });
+}
+
 const options = parseArgs(process.argv.slice(2));
 const root = repositoryRoot();
 process.chdir(root);
 ensureCodex();
 const contractPath = ensureTask(options.taskId);
+const planPath = join("tasks", options.taskId, "plan.md");
+const resolvedPlanPath = existsSync(planPath) ? planPath : null;
 const baseCommit = resolveGitRef(root, options.baseRef);
 const branch = currentBranch(root);
-if (branch === "main" || branch === "master" || branch === "DETACHED_HEAD") {
+if (branch === "main" || branch === "master" || branch === "dev" || branch === "DETACHED_HEAD") {
   fail(`autonomous development requires a dedicated task branch, current branch: ${branch}`);
 }
 
 const defaults = { baseRef: options.baseRef, baseCommit, branch };
+const context = {
+  root,
+  taskId: options.taskId,
+  baseRef: options.baseRef,
+  baseCommit,
+  branch,
+  contractPath,
+  planPath: resolvedPlanPath,
+  defaults,
+};
 let loaded = readWorkflowState(root, options.taskId, defaults);
 if (loaded.exists) {
   if (loaded.state.baseRef !== options.baseRef || loaded.state.baseCommit !== baseCommit) {
@@ -340,12 +664,11 @@ if (loaded.exists) {
   if (loaded.state.branch !== branch) fail(`workflow belongs to branch ${loaded.state.branch}`);
 }
 
-const hasChanges = implementationHasChanges(root, baseCommit);
-const firstAction = decideAutonomousAction(loaded.state, { hasImplementationChanges: hasChanges });
 if (options.dryRun) {
   console.log(`[scaflow-run] task: ${options.taskId}`);
   console.log(`[scaflow-run] workflow state: ${loaded.state.workflowState}`);
-  console.log(`[scaflow-run] next action: ${firstAction}`);
+  console.log(`[scaflow-run] architect: ${loaded.state.architecture?.preparation ? "prepared" : "preparation required"}`);
+  console.log(`[scaflow-run] implementation changes: ${implementationHasChanges(root, baseCommit) ? "yes" : "no"}`);
   process.exit(0);
 }
 
@@ -354,7 +677,7 @@ const lockPath = join(loaded.paths.directory, "run.lock");
 acquireLock(lockPath);
 
 const runState = {
-  version: 1,
+  version: 2,
   taskId: options.taskId,
   status: "running",
   workflowState: loaded.state.workflowState,
@@ -379,49 +702,91 @@ let exitCode = 1;
 try {
   for (let guard = 0; guard < 100; guard += 1) {
     loaded = readWorkflowState(root, options.taskId, defaults);
-    const state = loaded.state;
-    const action = decideAutonomousAction(state, {
-      hasImplementationChanges: implementationHasChanges(root, baseCommit),
-    });
+    let state = loaded.state;
 
-    if (action === AUTONOMOUS_ACTIONS.SUCCEEDED || action === AUTONOMOUS_ACTIONS.STOP_DELIVERED) {
+    if (state.workflowState === "approved" || state.workflowState === "approved_with_follow_ups") {
+      const completion = ensureCompletionSummary(context, state, loaded.paths);
+      recordStep(runState, completion.reused ? "architect_completion_reused" : "architect_completion", 0, state.workflowState);
       runState.status = "succeeded";
       runState.stopReason = state.workflowState;
       exitCode = 0;
       break;
     }
-    if (action === AUTONOMOUS_ACTIONS.STOP_BLOCKED) {
+
+    if (["committed", "pushed", "merged"].includes(state.workflowState)) {
+      runState.status = "succeeded";
+      runState.stopReason = state.workflowState;
+      exitCode = 0;
+      break;
+    }
+
+    if (state.workflowState === "blocked") {
       runState.status = "blocked";
-      runState.stopReason = "auditor returned BLOCKED";
+      runState.stopReason = state.architecture?.lastError || "workflow is blocked";
       exitCode = 2;
       break;
     }
-    if (action === AUTONOMOUS_ACTIONS.STOP_ACTIVE) {
+
+    if (state.workflowState === "developing" || state.workflowState === "auditing") {
       runState.status = "stopped";
       runState.stopReason = `workflow is already active: ${state.workflowState}`;
       exitCode = 2;
       break;
     }
 
-    if (
-      (action === AUTONOMOUS_ACTIONS.DEVELOP_INITIAL || action === AUTONOMOUS_ACTIONS.DEVELOP_RESUME) &&
-      (state.development?.attempt ?? 0) >= options.maxDevelopmentAttempts
-    ) {
-      runState.status = "limit_reached";
-      runState.stopReason = "maximum development attempts reached";
-      exitCode = 2;
-      break;
-    }
-    if (action === AUTONOMOUS_ACTIONS.AUDIT && (state.audit?.round ?? 0) >= options.maxAuditRounds) {
-      runState.status = "limit_reached";
-      runState.stopReason = "maximum audit rounds reached";
-      exitCode = 2;
-      break;
+    if (!state.architecture?.preparation || state.architecture.preparation.baseCommit !== baseCommit) {
+      const preparation = ensurePreparation(context, state, loaded.paths);
+      loaded = readWorkflowState(root, options.taskId, defaults);
+      state = loaded.state;
+      recordStep(runState, preparation.reused ? "architect_preparation_reused" : "architect_preparation", 0, state.workflowState);
+      if (state.workflowState === "blocked") continue;
     }
 
-    let child;
-    if (action === AUTONOMOUS_ACTIONS.DEVELOP_INITIAL || action === AUTONOMOUS_ACTIONS.DEVELOP_RESUME) {
-      child = executeDeveloper({
+    if (state.workflowState === "ready") {
+      if (implementationHasChanges(root, baseCommit)) {
+        importExistingImplementation({
+          root,
+          taskId: options.taskId,
+          defaults,
+          state,
+          baseCommit,
+        });
+        loaded = readWorkflowState(root, options.taskId, defaults);
+        recordStep(runState, "import_existing_implementation", 0, loaded.state.workflowState);
+      } else {
+        if ((state.development?.attempt ?? 0) >= options.maxDevelopmentAttempts) {
+          runState.status = "limit_reached";
+          runState.stopReason = "maximum development attempts reached";
+          exitCode = 2;
+          break;
+        }
+        const child = executeDeveloper({
+          root,
+          taskId: options.taskId,
+          baseRef: options.baseRef,
+          baseCommit,
+          contractPath,
+          state,
+          paths: loaded.paths,
+          resume: false,
+        });
+        loaded = readWorkflowState(root, options.taskId, defaults);
+        recordStep(runState, "develop_initial", child, loaded.state.workflowState);
+      }
+    } else if (["development_failed", "changes_required", "audit_invalid"].includes(state.workflowState)) {
+      if ((state.development?.attempt ?? 0) >= options.maxDevelopmentAttempts) {
+        runState.status = "limit_reached";
+        runState.stopReason = "maximum development attempts reached";
+        exitCode = 2;
+        break;
+      }
+      const repairDecision = ensureRepairBrief(context, state, loaded.paths);
+      loaded = readWorkflowState(root, options.taskId, defaults);
+      state = loaded.state;
+      recordStep(runState, "architect_repair", 0, state.workflowState);
+      if (repairDecision === "BLOCKED" || state.workflowState === "blocked") continue;
+
+      const child = executeDeveloper({
         root,
         taskId: options.taskId,
         baseRef: options.baseRef,
@@ -429,25 +794,51 @@ try {
         contractPath,
         state,
         paths: loaded.paths,
-        resume: action === AUTONOMOUS_ACTIONS.DEVELOP_RESUME,
+        resume: true,
       });
-    } else {
+      loaded = readWorkflowState(root, options.taskId, defaults);
+      recordStep(runState, "develop_resume", child, loaded.state.workflowState);
+    } else if (state.workflowState === "ready_for_audit") {
+      const review = ensurePostDevelopmentReview(context, state, loaded.paths);
+      loaded = readWorkflowState(root, options.taskId, defaults);
+      state = loaded.state;
+      recordStep(runState, review.reused ? "architect_post_review_reused" : "architect_post_review", 0, state.workflowState);
+      if (state.workflowState !== "ready_for_audit") continue;
+
+      if ((state.audit?.round ?? 0) >= options.maxAuditRounds) {
+        runState.status = "limit_reached";
+        runState.stopReason = "maximum audit rounds reached";
+        exitCode = 2;
+        break;
+      }
       const result = run("node", [
         join(root, "scripts", "scaflow-audit.mjs"),
         options.taskId,
         "--base",
         options.baseRef,
       ]);
-      child = result.status ?? 1;
+      loaded = readWorkflowState(root, options.taskId, defaults);
+      recordStep(runState, "audit", result.status ?? 1, loaded.state.workflowState);
+    } else if (state.workflowState === "audit_failed") {
+      if ((state.audit?.round ?? 0) >= options.maxAuditRounds) {
+        runState.status = "limit_reached";
+        runState.stopReason = "maximum audit rounds reached";
+        exitCode = 2;
+        break;
+      }
+      const result = run("node", [
+        join(root, "scripts", "scaflow-audit.mjs"),
+        options.taskId,
+        "--base",
+        options.baseRef,
+      ]);
+      loaded = readWorkflowState(root, options.taskId, defaults);
+      recordStep(runState, "audit_retry", result.status ?? 1, loaded.state.workflowState);
+    } else {
+      throw new Error(`unsupported workflow state: ${state.workflowState}`);
     }
 
     loaded = readWorkflowState(root, options.taskId, defaults);
-    runState.steps.push({
-      at: new Date().toISOString(),
-      action,
-      exitCode: child,
-      resultState: loaded.state.workflowState,
-    });
     runState.workflowState = loaded.state.workflowState;
     runState.developmentAttempts = loaded.state.development?.attempt ?? 0;
     runState.auditRounds = loaded.state.audit?.round ?? 0;
@@ -461,8 +852,6 @@ try {
         exitCode = 2;
         break;
       }
-    } else {
-      runState.failureTracker = { signature: null, count: 0 };
     }
 
     writeRunFiles(loaded.paths, runState);
