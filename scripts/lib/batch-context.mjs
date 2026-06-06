@@ -1,4 +1,10 @@
-import { cpSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+} from "node:fs";
 import { join } from "node:path";
 
 function copyDirectoryEntries(source, target) {
@@ -9,6 +15,17 @@ function copyDirectoryEntries(source, target) {
       recursive: entry.isDirectory(),
       force: true,
     });
+  }
+}
+
+function isTrustedHistoricalBatch(batchDirectory) {
+  const statePath = join(batchDirectory, "state.json");
+  if (!existsSync(statePath)) return false;
+  try {
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    return state.status === "completed" && state.pushEnabled === true;
+  } catch {
+    return false;
   }
 }
 
@@ -23,7 +40,9 @@ export function hydrateHistoricalCompletionContext({ root, currentBatchId, targe
     .sort();
 
   for (const batchId of batches) {
-    const source = join(batchesDirectory, batchId, "context", "completions");
+    const batchDirectory = join(batchesDirectory, batchId);
+    if (!isTrustedHistoricalBatch(batchDirectory)) continue;
+    const source = join(batchDirectory, "context", "completions");
     if (!existsSync(source)) continue;
     for (const entry of readdirSync(source, { withFileTypes: true })) {
       if (!entry.isFile() || !/^SFL-\d{3}\.(?:md|json)$/.test(entry.name)) continue;
