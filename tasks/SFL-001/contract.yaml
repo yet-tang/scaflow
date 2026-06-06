@@ -4,7 +4,7 @@ task:
   title: Engine Monorepo Foundation
   type: foundation
   risk_level: R1
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Establish the TypeScript monorepo foundation, package names, root scripts, and smoke tests without implementing product behavior.
 source_requirements:
