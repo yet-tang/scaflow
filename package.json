@@ -25,10 +25,10 @@
     "test:workflow": "node --test scripts/lib/*.test.mjs",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",
-    "scaflow-dev": "node scripts/scaflow-dev.mjs",
-    "scaflow-audit": "node scripts/scaflow-audit.mjs",
+    "scaflow-dev": "node scripts/scaflow-command.mjs dev",
+    "scaflow-audit": "node scripts/scaflow-command.mjs audit",
     "scaflow-status": "node scripts/scaflow-status.mjs",
-    "scaflow-run": "node scripts/scaflow-run.mjs",
-    "scaflow-batch": "node scripts/scaflow-batch.mjs"
+    "scaflow-run": "node scripts/scaflow-command.mjs run",
+    "scaflow-batch": "node scripts/scaflow-command.mjs batch"
   }
 }
