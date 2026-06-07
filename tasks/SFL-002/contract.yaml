@@ -4,7 +4,7 @@ task:
   title: Error and Logging Foundation
   type: foundation
   risk_level: R2
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Provide shared error metadata, recoverability, suggestions, redaction, and correlation IDs for later packages.
 source_requirements:
