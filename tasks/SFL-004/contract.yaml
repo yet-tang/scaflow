@@ -7,12 +7,12 @@ task:
   definition_state: ready
 objective:
   summary: Register the scaflow CLI, global options, JSON output mode, and stable error rendering without implementing business commands.
-source_requirements:
-  - id: FR-004
-    document: docs/source/scaflow-v0.1.0-prd.md
+source_requirements: []
 source_references:
   - document: docs/source/scaflow-v0.1.0-prd.md
     section: "12. CLI 范围"
+  - document: docs/exec-plans/scaflow-v0.1.0.md
+    section: "Milestones And Tasks / SFL-004 CLI Foundation"
 dependencies:
   - SFL-002
   - SFL-003
