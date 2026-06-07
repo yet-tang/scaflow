@@ -4,7 +4,7 @@ task:
   title: Schema Infrastructure
   type: schema
   risk_level: R1
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Establish the shared Zod schema package, parse helpers, typed errors, and public schema exports.
 source_requirements:
