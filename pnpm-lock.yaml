@@ -18,7 +18,14 @@ importers:
         specifier: ^3.2.4
         version: 3.2.6(@types/node@22.19.19)
 
-  apps/cli: {}
+  apps/cli:
+    dependencies:
+      '@scaflow/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      commander:
+        specifier: ^14.0.2
+        version: 14.0.2
 
   packages/changeset: {}
 
@@ -391,6 +398,10 @@ packages:
   check-error@2.1.3:
     resolution: {integrity: sha512-PAJdDJusoxnwm1VwW07VWwUN1sl7smmC3OKggvndJFadxxDRyFJBX/ggnu/KE4kQAB7a3Dp8f/YXC1FlUprWmA==}
     engines: {node: '>= 16'}
+
+  commander@14.0.2:
+    resolution: {integrity: sha512-TywoWNNRbhoD0BXs1P3ZEScW8W5iKrnbithIl0YH+uCmBd0QpPOA8yc82DS3BIE5Ma6FnBVUsJ7wVUDz4dvOWQ==}
+    engines: {node: '>=20'}
 
   debug@4.4.3:
     resolution: {integrity: sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==}
@@ -826,6 +837,8 @@ snapshots:
       pathval: 2.0.1
 
   check-error@2.1.3: {}
+
+  commander@14.0.2: {}
 
   debug@4.4.3:
     dependencies:
