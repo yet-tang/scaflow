@@ -4,7 +4,7 @@ task:
   title: CLI Foundation
   type: cli
   risk_level: R1
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Register the scaflow CLI, global options, JSON output mode, and stable error rendering without implementing business commands.
 source_requirements: []
