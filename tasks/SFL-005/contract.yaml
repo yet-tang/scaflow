@@ -4,7 +4,7 @@ task:
   title: State Store Foundation
   type: state
   risk_level: R2
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Implement the SQLite state store foundation with connection management, migrations, transactions, and repository boundaries.
 source_requirements:
