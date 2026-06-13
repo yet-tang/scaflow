@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "repositories": [
+    {
+      "id": "api",
+      "name": "Primary API",
+      "git_url": "https://github.com/example/api.git",
+      "default_branch": "main",
+      "checkout_directory": "apps/api",
+      "type": "service"
+    },
+    {
+      "id": "api",
+      "name": "Secondary API",
+      "git_url": "https://github.com/example/second-api.git",
+      "default_branch": "main",
+      "checkout_directory": "apps/second-api",
+      "type": "service"
+    }
+  ]
+}

@@ -8,12 +8,15 @@ import {
   packageName,
   parseSchema,
   projectConfigSchema,
+  repositoryCommandSchema,
+  repositoryManifestSchema,
   safeParseSchema,
   taskDefinitionStateSchema,
   taskRunStateSchema,
   z,
   type Infer,
   type ProjectConfig,
+  type RepositoryManifest,
 } from "../src/index";
 
 const projectFixtureUrl = new URL(
@@ -287,4 +290,235 @@ describe("@scaflow/schemas", () => {
       ]);
     },
   );
+
+  it("validates a strict repository manifest and its public type", async () => {
+    const input = await readProjectFixture("valid-repositories.json");
+    const manifest = parseSchema(repositoryManifestSchema, input);
+    const typedManifest: RepositoryManifest = manifest;
+
+    expect(typedManifest).toEqual(input);
+    expect(typedManifest.repositories.map(({ id }) => id)).toEqual([
+      "web",
+      "api",
+    ]);
+  });
+
+  it.each([
+    [
+      "invalid-repositories-duplicate-id.json",
+      ["repositories", 1, "id"],
+    ],
+    [
+      "invalid-repositories-traversal.json",
+      ["repositories", 0, "checkout_directory"],
+    ],
+    [
+      "invalid-repositories-missing-dependency.json",
+      ["repositories", 0, "dependencies", 0],
+    ],
+  ])(
+    "returns structured repository manifest errors for %s",
+    async (fixtureName, expectedPath) => {
+      const result = safeParseSchema(
+        repositoryManifestSchema,
+        await readProjectFixture(fixtureName),
+      );
+
+      expect(result.success).toBe(false);
+      if (result.success) {
+        throw new Error("Expected repository manifest parsing to fail");
+      }
+
+      expect(result.error).toBeInstanceOf(SchemaParseError);
+      expect(result.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "custom",
+            path: expectedPath,
+          }),
+        ]),
+      );
+    },
+  );
+
+  it.each([
+    "@control",
+    "@application",
+  ])("rejects reserved repository ID %j", (id) => {
+    const result = repositoryManifestSchema.safeParse({
+      version: 1,
+      repositories: [
+        {
+          ...validRepository(),
+          id,
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual([
+        expect.objectContaining({
+          code: "custom",
+          path: ["repositories", 0, "id"],
+        }),
+      ]);
+    }
+  });
+
+  it.each([
+    "/absolute/api",
+    "C:\\work\\api",
+    "C:api",
+    "\\\\server\\share\\api",
+    "..\\api",
+    "apps/../../api",
+    "",
+  ])("rejects unsafe checkout directory %j", (checkoutDirectory) => {
+    const result = repositoryManifestSchema.safeParse({
+      version: 1,
+      repositories: [
+        {
+          ...validRepository(),
+          checkout_directory: checkoutDirectory,
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ["repositories", 0, "checkout_directory"],
+          }),
+        ]),
+      );
+    }
+  });
+
+  it.each([
+    ["apps/api", "apps/./api"],
+    ["apps/api", "apps//api"],
+    ["apps/api", "apps\\api"],
+    ["apps/api", "apps/api/"],
+    ["apps/api", "apps/api///"],
+    ["apps/api", "apps\\api\\\\"],
+  ])(
+    "rejects normalized-equivalent checkout directories %j and %j",
+    (firstCheckout, secondCheckout) => {
+      const result = repositoryManifestSchema.safeParse({
+        version: 1,
+        repositories: [
+          validRepository({ checkout_directory: firstCheckout }),
+          validRepository({
+            id: "worker",
+            checkout_directory: secondCheckout,
+          }),
+        ],
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toEqual([
+          expect.objectContaining({
+            code: "custom",
+            path: ["repositories", 1, "checkout_directory"],
+          }),
+        ]);
+      }
+    },
+  );
+
+  it("requires all repository fields and rejects unknown fields", () => {
+    const missingName = validRepository() as Record<string, unknown>;
+    delete missingName.name;
+
+    const result = repositoryManifestSchema.safeParse({
+      version: 1,
+      repositories: [
+        {
+          ...missingName,
+          owner: "platform",
+        },
+      ],
+      metadata: {},
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "invalid_type",
+            path: ["repositories", 0, "name"],
+          }),
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            path: ["repositories", 0],
+          }),
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            path: [],
+          }),
+        ]),
+      );
+    }
+  });
+
+  it("accepts only structured repository commands", () => {
+    expect(
+      repositoryCommandSchema.safeParse({
+        executable: "pnpm",
+        args: ["test"],
+        timeout_seconds: 300,
+        required: true,
+      }).success,
+    ).toBe(true);
+
+    for (const command of [
+      "pnpm test",
+      {
+        executable: "",
+        args: ["test"],
+        timeout_seconds: 300,
+        required: true,
+      },
+      {
+        executable: "pnpm",
+        args: "test",
+        timeout_seconds: 300,
+        required: true,
+      },
+      {
+        executable: "pnpm",
+        args: ["test"],
+        timeout_seconds: 0,
+        required: true,
+      },
+      {
+        executable: "pnpm",
+        args: ["test"],
+        timeout_seconds: 300,
+        required: true,
+        shell: true,
+      },
+    ]) {
+      expect(repositoryCommandSchema.safeParse(command).success).toBe(false);
+    }
+  });
 });
+
+function validRepository(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    id: "api",
+    name: "API",
+    git_url: "https://github.com/example/api.git",
+    default_branch: "main",
+    checkout_directory: "apps/api",
+    type: "service",
+    ...overrides,
+  };
+}

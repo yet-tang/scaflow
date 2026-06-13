@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "repositories": [
+    {
+      "id": "web",
+      "name": "Web Application",
+      "git_url": "git@github.com:example/web.git",
+      "default_branch": "main",
+      "checkout_directory": "apps/web",
+      "type": "web",
+      "dependencies": ["api"],
+      "commands": [
+        {
+          "executable": "pnpm",
+          "args": ["test"],
+          "timeout_seconds": 300,
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "name": "API",
+      "git_url": "https://github.com/example/api.git",
+      "default_branch": "main",
+      "checkout_directory": "apps/api",
+      "type": "service"
+    }
+  ]
+}

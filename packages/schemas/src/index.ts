@@ -24,5 +24,13 @@ export {
   projectConfigSchema,
   type ProjectConfig,
 } from "./project-config.js";
+export {
+  repositoryCommandSchema,
+  repositoryManifestEntrySchema,
+  repositoryManifestSchema,
+  type RepositoryCommand,
+  type RepositoryManifest,
+  type RepositoryManifestEntry,
+} from "./repository-manifest.js";
 export { z } from "zod";
 export type { ZodType, infer as Infer } from "zod";

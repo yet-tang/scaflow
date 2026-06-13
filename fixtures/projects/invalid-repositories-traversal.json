@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "repositories": [
+    {
+      "id": "api",
+      "name": "API",
+      "git_url": "https://github.com/example/api.git",
+      "default_branch": "main",
+      "checkout_directory": "apps/../api",
+      "type": "service"
+    }
+  ]
+}
