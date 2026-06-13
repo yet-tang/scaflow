@@ -4,7 +4,7 @@ task:
   title: Event Log and Audit Trail
   type: state
   risk_level: R2
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Persist task run events, command events, verification events, and state transitions in transactionally consistent audit records.
 source_requirements:
