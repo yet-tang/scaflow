@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -5,12 +7,25 @@ import {
   changeSetStateSchema,
   packageName,
   parseSchema,
+  projectConfigSchema,
   safeParseSchema,
   taskDefinitionStateSchema,
   taskRunStateSchema,
   z,
   type Infer,
+  type ProjectConfig,
 } from "../src/index";
+
+const projectFixtureUrl = new URL(
+  "../../../fixtures/projects/",
+  import.meta.url,
+);
+
+async function readProjectFixture(name: string): Promise<unknown> {
+  return JSON.parse(
+    await readFile(new URL(name, projectFixtureUrl), "utf8"),
+  ) as unknown;
+}
 
 describe("@scaflow/schemas", () => {
   it("exposes package identity", () => {
@@ -152,4 +167,124 @@ describe("@scaflow/schemas", () => {
     expect(taskRunStateSchema.safeParse("verified").success).toBe(false);
     expect(changeSetStateSchema.safeParse("ready").success).toBe(false);
   });
+
+  it("validates project metadata and an exact pinned engine version", async () => {
+    const input = await readProjectFixture("valid-project-config.json");
+    const expected: ProjectConfig = {
+      version: 1,
+      project: {
+        id: "beauty-ai",
+        name: "Beauty AI",
+      },
+      engine: {
+        version: "0.1.0",
+      },
+    };
+
+    expect(parseSchema(projectConfigSchema, input)).toEqual(expected);
+    expect(
+      projectConfigSchema.safeParse({
+        ...expected,
+        engine: { version: "1.2.3-123abc.1+build.7" },
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    [
+      "invalid-missing-project-name.json",
+      ["project", "name"],
+      "invalid_type",
+    ],
+    [
+      "invalid-empty-project-id.json",
+      ["project", "id"],
+      "too_small",
+    ],
+    [
+      "invalid-malformed-engine-version.json",
+      ["engine", "version"],
+      "invalid_format",
+    ],
+    [
+      "invalid-engine-version-range.json",
+      ["engine", "version"],
+      "invalid_format",
+    ],
+    ["invalid-unknown-field.json", [], "unrecognized_keys"],
+  ])(
+    "returns structured errors for %s",
+    async (fixtureName, expectedPath, expectedCode) => {
+      const input = await readProjectFixture(fixtureName);
+      const result = safeParseSchema(projectConfigSchema, input);
+
+      expect(result.success).toBe(false);
+      if (result.success) {
+        throw new Error("Expected project config parsing to fail");
+      }
+
+      expect(result.error).toBeInstanceOf(SchemaParseError);
+      expect(result.error).toMatchObject({
+        code: "SCHEMA_PARSE_FAILED",
+        issues: expect.arrayContaining([
+          expect.objectContaining({
+            code: expectedCode,
+            path: expectedPath,
+          }),
+        ]),
+      });
+    },
+  );
+
+  it("rejects unsupported nested fields", () => {
+    const result = safeParseSchema(projectConfigSchema, {
+      version: 1,
+      project: {
+        id: "beauty-ai",
+        name: "Beauty AI",
+        owner: "platform",
+      },
+      engine: {
+        version: "0.1.0",
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) {
+      throw new Error("Expected project config parsing to fail");
+    }
+
+    expect(result.error.issues).toEqual([
+      expect.objectContaining({
+        code: "unrecognized_keys",
+        path: ["project"],
+      }),
+    ]);
+  });
+
+  it.each(["", "latest", "1.x", ">=1.0.0", "1.0.0 || 2.0.0"])(
+    "rejects non-exact engine version %j",
+    (version) => {
+      const result = safeParseSchema(projectConfigSchema, {
+        version: 1,
+        project: {
+          id: "beauty-ai",
+          name: "Beauty AI",
+        },
+        engine: { version },
+      });
+
+      expect(result.success).toBe(false);
+      if (result.success) {
+        throw new Error("Expected project config parsing to fail");
+      }
+
+      expect(result.error.issues).toEqual([
+        expect.objectContaining({
+          code: "invalid_format",
+          path: ["engine", "version"],
+        }),
+      ]);
+    },
+  );
 });

@@ -20,5 +20,9 @@ export {
   type SchemaParseOptions,
   type SchemaParseResult,
 } from "./parse.js";
+export {
+  projectConfigSchema,
+  type ProjectConfig,
+} from "./project-config.js";
 export { z } from "zod";
 export type { ZodType, infer as Infer } from "zod";

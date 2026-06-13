@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "project": {
+    "id": "beauty-ai"
+  },
+  "engine": {
+    "version": "0.1.0"
+  }
+}
