@@ -4,7 +4,7 @@ task:
   title: Project Config Schema
   type: schema
   risk_level: R2
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Define scaflow.yaml schema, engine version pinning, and project validation foundation.
 source_requirements:
