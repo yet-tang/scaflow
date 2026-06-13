@@ -96,6 +96,7 @@ describe("@scaflow/state", () => {
       expect(store.appliedMigrationVersions()).toEqual([
         "001-create-projects",
         "002-add-name",
+        "007-event-log-and-audit-trail",
       ]);
       expect(
         store.repository((context) =>

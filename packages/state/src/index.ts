@@ -1,5 +1,7 @@
 import sqlite3 from "node-sqlite3-wasm";
 
+import { eventLogMigration } from "./event-log.js";
+
 const { Database } = sqlite3;
 
 export const packageName = "@scaflow/state";
@@ -25,6 +27,25 @@ export type {
   TaskDefinitionState,
   TaskRunState,
 } from "@scaflow/schemas";
+export {
+  auditEventCategories,
+  eventLogMigration,
+  getRuntimeState,
+  initializeRuntimeState,
+  listAuditEvents,
+  recordAuditEvent,
+  transitionRuntimeState,
+  type AuditEventCategory,
+  type AuditEventInput,
+  type AuditEventRecord,
+  type AuditEventType,
+  type InitializeRuntimeStateInput,
+  type RecordableAuditEventCategory,
+  type RecordableAuditEventType,
+  type RuntimeStateDomain,
+  type RuntimeStateRecord,
+  type TransitionRuntimeStateInput,
+} from "./event-log.js";
 
 const migrationTableName = "_scaflow_schema_migrations";
 
@@ -80,7 +101,10 @@ export class StateStore {
     databasePath: string,
     options: OpenStateStoreOptions = {},
   ) {
-    this.#migrations = validateMigrations(options.migrations ?? []);
+    this.#migrations = validateMigrations([
+      eventLogMigration,
+      ...(options.migrations ?? []),
+    ]);
     this.#database = new Database(databasePath);
     this.#database.exec("PRAGMA foreign_keys = ON");
     this.#database.exec("PRAGMA busy_timeout = 5000");
