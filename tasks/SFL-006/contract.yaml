@@ -4,7 +4,7 @@ task:
   title: Domain State Machines
   type: state
   risk_level: R2
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Define Task, TaskRun, and ChangeSet states, legal transitions, and state authority rules.
 source_requirements:
