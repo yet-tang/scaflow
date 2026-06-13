@@ -4,7 +4,7 @@ task:
   title: Repository Manifest Schema
   type: schema
   risk_level: R2
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Define repositories.yaml schema and validate repository IDs, checkout paths, dependencies, and structured commands.
 source_requirements:
