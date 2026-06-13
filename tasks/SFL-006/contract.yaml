@@ -15,13 +15,14 @@ source_references:
     section: "7. 核心术语与状态"
 dependencies:
   - SFL-005
-dependency_changes: forbidden
+dependency_changes: allowed
 repositories:
   primary: "@control"
   scopes:
     - repository: "@control"
       access: read-write
       allowed_paths:
+        - pnpm-lock.yaml
         - packages/state/**
         - packages/schemas/**
       forbidden_paths:
