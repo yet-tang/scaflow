@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   SchemaParseError,
+  changeSetStateSchema,
   packageName,
   parseSchema,
   safeParseSchema,
+  taskDefinitionStateSchema,
+  taskRunStateSchema,
   z,
   type Infer,
 } from "../src/index";
@@ -113,5 +116,40 @@ describe("@scaflow/schemas", () => {
         ],
       });
     }
+  });
+
+  it("defines separate state schemas with the exact PRD literals", () => {
+    expect(taskDefinitionStateSchema.options).toEqual([
+      "draft",
+      "ready",
+      "cancelled",
+      "completed",
+    ]);
+    expect(taskRunStateSchema.options).toEqual([
+      "queued",
+      "preparing",
+      "running",
+      "verifying",
+      "repairing",
+      "succeeded",
+      "failed",
+      "blocked",
+      "cancelled",
+      "orphaned",
+    ]);
+    expect(changeSetStateSchema.options).toEqual([
+      "draft",
+      "verified",
+      "published",
+      "partially_merged",
+      "merged",
+      "failed",
+      "cancelled",
+      "rolled_back",
+    ]);
+
+    expect(taskDefinitionStateSchema.safeParse("running").success).toBe(false);
+    expect(taskRunStateSchema.safeParse("verified").success).toBe(false);
+    expect(changeSetStateSchema.safeParse("ready").success).toBe(false);
   });
 });

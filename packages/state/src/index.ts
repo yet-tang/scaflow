@@ -4,6 +4,28 @@ const { Database } = sqlite3;
 
 export const packageName = "@scaflow/state";
 
+export {
+  StateTransitionError,
+  changeSetTransitions,
+  stateAuthorities,
+  taskDefinitionTransitions,
+  taskRunTransitions,
+  validateChangeSetTransition,
+  validateTaskDefinitionTransition,
+  validateTaskRunTransition,
+  type StateAuthority,
+  type StateDomain,
+  type StateTransitionErrorOptions,
+  type StateTransitionRejectionReason,
+  type TaskCompletionEvidence,
+  type TaskDefinitionTransitionOptions,
+} from "./domain-state-machines.js";
+export type {
+  ChangeSetState,
+  TaskDefinitionState,
+  TaskRunState,
+} from "@scaflow/schemas";
+
 const migrationTableName = "_scaflow_schema_migrations";
 
 export type SqlValue = null | number | bigint | string | Uint8Array;

@@ -1,6 +1,17 @@
 export const packageName = "@scaflow/schemas";
 
 export {
+  changeSetStateSchema,
+  changeSetStates,
+  taskDefinitionStateSchema,
+  taskDefinitionStates,
+  taskRunStateSchema,
+  taskRunStates,
+  type ChangeSetState,
+  type TaskDefinitionState,
+  type TaskRunState,
+} from "./domain-states.js";
+export {
   SchemaParseError,
   formatZodIssues,
   parseSchema,

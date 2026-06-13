@@ -48,6 +48,12 @@ importers:
 
   packages/state:
     dependencies:
+      '@scaflow/core':
+        specifier: workspace:*
+        version: link:../core
+      '@scaflow/schemas':
+        specifier: workspace:*
+        version: link:../schemas
       node-sqlite3-wasm:
         specifier: 0.8.22
         version: 0.8.22

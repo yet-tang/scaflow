@@ -13,6 +13,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@scaflow/core": "workspace:*",
+    "@scaflow/schemas": "workspace:*",
     "node-sqlite3-wasm": "0.8.22"
   }
 }
