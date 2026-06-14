@@ -3,7 +3,7 @@ task:
   id: SFL-010
   title: Template Engine
   type: foundation
-  risk_level: R1
+  risk_level: R3
   definition_state: ready
 objective:
   summary: Render Scaflow Project Repository templates without overwriting user-modified files.
@@ -15,7 +15,7 @@ source_requirements:
 dependencies:
   - SFL-008
   - SFL-009
-dependency_changes: forbidden
+dependency_changes: allowed
 repositories:
   primary: "@control"
   scopes:
@@ -25,6 +25,7 @@ repositories:
         - packages/template/**
         - templates/default-project-scaflow/**
         - fixtures/projects/**
+        - pnpm-lock.yaml
       forbidden_paths:
         - docs/source/scaflow-v0.1.0-prd.md
         - workspace/**
@@ -36,8 +37,19 @@ acceptance_criteria:
     description: Re-running template rendering never overwrites modified user files.
   - id: SFL-010-AC-03
     description: Template .gitignore excludes workspace/ and .scaflow/.
+  - id: SFL-010-AC-04
+    description: Rendering is confined to the selected destination under pre-existing symlink ancestry and concurrent destination-ancestor replacement attempts.
+  - id: SFL-010-AC-05
+    description: Failed writes and publication races leave no incomplete destination files or temporary artifacts, and a later render can recover.
+  - id: SFL-010-AC-06
+    description: Native dependency changes are limited to node-addon-api@8.8.0 and node-gyp@13.0.0 required by packages/template; no other runtime or development dependency may be added.
 verification:
   commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/template", "build"]
+      timeout_seconds: 300
+      required: true
     - repository: "@control"
       executable: pnpm
       args: ["--filter", "@scaflow/template", "test"]
