@@ -6,10 +6,17 @@
   "exports": {
     ".": "./dist/index.js"
   },
+  "gypfile": true,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node-gyp rebuild && tsc -p tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run tests/smoke.test.ts",
+    "test": "node-gyp rebuild && vitest run tests/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "node-addon-api": "8.8.0"
+  },
+  "devDependencies": {
+    "node-gyp": "13.0.0"
   }
 }
