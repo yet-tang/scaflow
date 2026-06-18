@@ -4,7 +4,7 @@ task:
   title: Template Engine
   type: foundation
   risk_level: R3
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Render Scaflow Project Repository templates without overwriting user-modified files.
 source_requirements:
