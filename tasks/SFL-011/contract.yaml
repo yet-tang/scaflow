@@ -4,7 +4,7 @@ task:
   title: Scaflow Init and Validate
   type: cli
   risk_level: R2
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Implement scaflow init and scaflow validate using the template engine and project schemas.
 source_requirements:
