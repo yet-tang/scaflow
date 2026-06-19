@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { pathToFileURL } from "node:url";
+import { spawn } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   ScaflowError,
@@ -13,6 +14,7 @@ export const packageName = "@scaflow/cli";
 export const CLI_NAME = "scaflow";
 export const NOT_IMPLEMENTED_ERROR_CODE = "COMMAND_NOT_IMPLEMENTED";
 export const USAGE_ERROR_CODE = "CLI_USAGE_ERROR";
+export const GIT_INIT_ERROR_CODE = "GIT_INIT_FAILED";
 
 export interface CliIo {
   stdout: Pick<NodeJS.WriteStream, "write">;
@@ -22,6 +24,8 @@ export interface CliIo {
 export interface CliProgramOptions {
   io?: CliIo;
   createCorrelationId?: () => string;
+  cwd?: string;
+  gitExecutable?: string;
 }
 
 export interface CliRunOptions extends CliProgramOptions {
@@ -51,6 +55,8 @@ const DEFAULT_IO: CliIo = {
 
 export function createCliProgram(options: CliProgramOptions = {}): Command {
   const io = options.io ?? DEFAULT_IO;
+  const cwd = options.cwd ?? process.cwd();
+  const gitExecutable = options.gitExecutable ?? "git";
   const program = new Command()
     .name(CLI_NAME)
     .description("Scaflow Execution Kernel")
@@ -67,6 +73,20 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
 
   for (const [name, children] of Object.entries(COMMAND_TREE)) {
     if (children === null) {
+      if (name === "init") {
+        registerInit(
+          program,
+          cwd,
+          io,
+          gitExecutable,
+          options.createCorrelationId,
+        );
+        continue;
+      }
+      if (name === "validate") {
+        registerValidate(program, cwd, io, options.createCorrelationId);
+        continue;
+      }
       registerStub(program, name, options.createCorrelationId);
       continue;
     }
@@ -94,7 +114,7 @@ export async function runCli(options: CliRunOptions = {}): Promise<number> {
     }
 
     const error =
-      caught instanceof ScaflowError
+      isScaflowErrorLike(caught)
         ? caught
         : commanderError(caught, options.createCorrelationId);
     renderError(error, program.opts().json === true, io.stderr);
@@ -157,6 +177,179 @@ function registerStub(
     });
 }
 
+function registerInit(
+  parent: Command,
+  cwd: string,
+  io: CliIo,
+  gitExecutable: string,
+  createCorrelationId?: () => string,
+): void {
+  parent
+    .command("init")
+    .description("initialize a Scaflow Project Repository")
+    .argument("<project-name>", "project display name")
+    .action(async (projectName: string) => {
+      const normalizedProjectName = projectName.trim();
+      if (normalizedProjectName === "") {
+        throw new ScaflowError("Project name must not be empty", {
+          code: USAGE_ERROR_CODE,
+          recoverable: false,
+          suggestion: "Provide a non-empty project name",
+          ...(createCorrelationId === undefined
+            ? {}
+            : { correlationId: createCorrelationId() }),
+        });
+      }
+
+      const template = await loadTemplateModule();
+      const result = await template.renderProjectTemplate(cwd, {
+        project: {
+          name: normalizedProjectName,
+          engineVersion: "0.1.0",
+        },
+      });
+      await initializeGitRepository(cwd, gitExecutable, createCorrelationId);
+
+      if (parent.opts().json === true) {
+        io.stdout.write(
+          `${JSON.stringify({
+            project: { name: normalizedProjectName },
+            created: result.created,
+            skipped: result.skipped,
+          })}\n`,
+        );
+        return;
+      }
+
+      io.stdout.write(
+        [
+          `Initialized Scaflow project "${normalizedProjectName}"`,
+          `Created: ${result.created.length}`,
+          `Skipped: ${result.skipped.length}`,
+          "",
+        ].join("\n"),
+      );
+    });
+}
+
+async function initializeGitRepository(
+  cwd: string,
+  gitExecutable: string,
+  createCorrelationId?: () => string,
+): Promise<void> {
+  const result = await runStructuredCommand({
+    executable: gitExecutable,
+    args: ["init"],
+    cwd,
+  });
+
+  if (result.exitCode === 0) {
+    return;
+  }
+
+  throw gitInitError(cwd, gitExecutable, result, createCorrelationId);
+}
+
+interface StructuredCommand {
+  readonly executable: string;
+  readonly args: readonly string[];
+  readonly cwd: string;
+}
+
+interface StructuredCommandResult {
+  readonly exitCode: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly stderr: string;
+  readonly spawnError?: NodeJS.ErrnoException;
+}
+
+async function runStructuredCommand(
+  command: StructuredCommand,
+): Promise<StructuredCommandResult> {
+  return await new Promise((resolve) => {
+    const child = spawn(command.executable, command.args, {
+      cwd: command.cwd,
+      shell: false,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    const stderr: Buffer[] = [];
+
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr.push(chunk);
+    });
+
+    child.on("error", (spawnError: NodeJS.ErrnoException) => {
+      resolve({
+        exitCode: null,
+        signal: null,
+        stderr: Buffer.concat(stderr).toString("utf8"),
+        spawnError,
+      });
+    });
+
+    child.on("close", (exitCode, signal) => {
+      resolve({
+        exitCode,
+        signal,
+        stderr: Buffer.concat(stderr).toString("utf8"),
+      });
+    });
+  });
+}
+
+function gitInitError(
+  cwd: string,
+  executable: string,
+  result: StructuredCommandResult,
+  createCorrelationId?: () => string,
+): ScaflowError {
+  return new ScaflowError("Could not initialize Git repository", {
+    code: GIT_INIT_ERROR_CODE,
+    recoverable: false,
+    suggestion: "Install Git or initialize the project in a writable directory",
+    ...(createCorrelationId === undefined
+      ? {}
+      : { correlationId: createCorrelationId() }),
+    details: {
+      command: {
+        executable,
+        args: ["init"],
+        cwd,
+      },
+      exitCode: result.exitCode,
+      signal: result.signal,
+      stderr: result.stderr,
+      spawnCode: result.spawnError?.code,
+    },
+  });
+}
+
+function registerValidate(
+  parent: Command,
+  cwd: string,
+  io: CliIo,
+  createCorrelationId?: () => string,
+): void {
+  parent
+    .command("validate")
+    .description("validate local Scaflow Project Repository configuration")
+    .action(async () => {
+      const correlationId = createCorrelationId?.();
+      const config = await loadConfigModule();
+      await config.validateLocalProject(
+        cwd,
+        correlationId === undefined ? {} : { correlationId },
+      );
+
+      if (parent.opts().json === true) {
+        io.stdout.write(`${JSON.stringify({ valid: true })}\n`);
+        return;
+      }
+
+      io.stdout.write("Scaflow project configuration is valid\n");
+    });
+}
+
 function getCommandPath(command: Command): string {
   const names: string[] = [];
   for (
@@ -186,6 +379,57 @@ function commanderError(
       ? {}
       : { correlationId: createCorrelationId() }),
   });
+}
+
+interface TemplateModule {
+  readonly renderProjectTemplate: (
+    destinationDirectory: string,
+    options: {
+      readonly project: {
+        readonly name: string;
+        readonly engineVersion: string;
+      };
+    },
+  ) => Promise<{
+    readonly created: readonly string[];
+    readonly skipped: readonly string[];
+  }>;
+}
+
+interface ConfigModule {
+  readonly validateLocalProject: (
+    directory: string,
+    options: { readonly correlationId?: string },
+  ) => Promise<unknown>;
+}
+
+function isScaflowErrorLike(caught: unknown): caught is ScaflowError {
+  return (
+    caught instanceof ScaflowError ||
+    (typeof caught === "object" &&
+      caught !== null &&
+      "message" in caught &&
+      "code" in caught &&
+      "recoverable" in caught &&
+      "correlationId" in caught)
+  );
+}
+
+async function loadTemplateModule(): Promise<TemplateModule> {
+  return (await import(workspaceModuleUrl("template"))) as TemplateModule;
+}
+
+async function loadConfigModule(): Promise<ConfigModule> {
+  return (await import(workspaceModuleUrl("config"))) as ConfigModule;
+}
+
+function workspaceModuleUrl(packageName: "config" | "template"): string {
+  const currentPath = fileURLToPath(import.meta.url);
+  const modulePath = currentPath.includes("/src/")
+    ? `../../../packages/${packageName}/src/index.ts`
+    : `../../../packages/${packageName}/dist/index.js`;
+
+  return new URL(modulePath, import.meta.url).href;
 }
 
 const invokedPath = process.argv[1];

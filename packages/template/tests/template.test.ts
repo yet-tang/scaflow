@@ -98,6 +98,34 @@ describe("@scaflow/template", () => {
     });
   });
 
+  it("renders project-specific init configuration when requested", async () => {
+    const destination = await temporaryDirectory("scaflow-template-init-");
+    await renderProjectTemplate(destination, {
+      project: { name: "Beauty AI" },
+    });
+
+    const projectConfig = JSON.parse(
+      await readFile(join(destination, "scaflow.yaml"), "utf8"),
+    );
+    expect(projectConfigSchema.parse(projectConfig)).toEqual({
+      version: 1,
+      project: { id: "beauty-ai", name: "Beauty AI" },
+      engine: { version: "0.1.0" },
+    });
+
+    expect(
+      JSON.parse(await readFile(join(destination, "repositories.yaml"), "utf8")),
+    ).toMatchObject({
+      version: 1,
+      repositories: [
+        {
+          id: "app",
+          checkout_directory: "apps/app",
+        },
+      ],
+    });
+  });
+
   it("never overwrites modified or concurrently published files", async () => {
     const destination = await temporaryDirectory("scaflow-template-");
     await writeFile(join(destination, "PRODUCT.md"), "user content\n");

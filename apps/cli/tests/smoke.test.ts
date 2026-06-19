@@ -1,14 +1,35 @@
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { ScaflowError } from "@scaflow/core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   CLI_NAME,
+  GIT_INIT_ERROR_CODE,
   NOT_IMPLEMENTED_ERROR_CODE,
   createCliProgram,
   packageName,
   renderError,
   runCli,
 } from "../src/index";
+
+const temporaryDirectories: string[] = [];
+
+async function temporaryDirectory(prefix: string): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), prefix));
+  temporaryDirectories.push(directory);
+  return directory;
+}
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryDirectories.splice(0).map((directory) =>
+      rm(directory, { recursive: true, force: true }),
+    ),
+  );
+});
 
 describe("@scaflow/cli", () => {
   it("exposes package identity", () => {
@@ -133,6 +154,216 @@ describe("@scaflow/cli", () => {
         recoverable: true,
         correlationId: "test-redaction",
         details: { password: "[REDACTED]" },
+      },
+    });
+  });
+
+  it("initializes a valid Scaflow project in an empty directory", async () => {
+    const directory = await temporaryDirectory("scaflow-cli-init-");
+    const output = createOutput();
+
+    const exitCode = await runCli({
+      argv: ["init", "Beauty AI"],
+      cwd: directory,
+      io: output.io,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(output.stderr()).toBe("");
+    expect(output.stdout()).toContain('Initialized Scaflow project "Beauty AI"');
+    expect((await stat(join(directory, ".git"))).isDirectory()).toBe(true);
+    expect(
+      JSON.parse(await readFile(join(directory, "scaflow.yaml"), "utf8")),
+    ).toMatchObject({
+      project: { id: "beauty-ai", name: "Beauty AI" },
+      engine: { version: "0.1.0" },
+    });
+    expect(
+      JSON.parse(await readFile(join(directory, "repositories.yaml"), "utf8")),
+    ).toMatchObject({
+      repositories: [{ id: "app", checkout_directory: "apps/app" }],
+    });
+    expect(await runCli({ argv: ["validate"], cwd: directory, io: output.io }))
+      .toBe(0);
+  });
+
+  it("preserves user-modified files when init is repeated", async () => {
+    const directory = await temporaryDirectory("scaflow-cli-init-repeat-");
+    const output = createOutput();
+
+    expect(
+      await runCli({
+        argv: ["init", "Beauty AI"],
+        cwd: directory,
+        io: output.io,
+      }),
+    ).toBe(0);
+    await writeFile(join(directory, "PRODUCT.md"), "user content\n");
+
+    const repeatOutput = createOutput();
+    expect(
+      await runCli({
+        argv: ["--json", "init", "Beauty AI"],
+        cwd: directory,
+        io: repeatOutput.io,
+      }),
+    ).toBe(0);
+
+    expect(await readFile(join(directory, "PRODUCT.md"), "utf8")).toBe(
+      "user content\n",
+    );
+    expect(JSON.parse(repeatOutput.stdout())).toMatchObject({
+      created: [],
+      skipped: expect.arrayContaining(["PRODUCT.md"]),
+    });
+    expect((await stat(join(directory, ".git"))).isDirectory()).toBe(true);
+  });
+
+  it("returns structured JSON errors when Git initialization fails", async () => {
+    const directory = await temporaryDirectory("scaflow-cli-init-git-fail-");
+    const output = createOutput();
+
+    const exitCode = await runCli({
+      argv: ["--json", "init", "Beauty AI"],
+      cwd: directory,
+      io: output.io,
+      gitExecutable: "scaflow-missing-git-for-test",
+      createCorrelationId: () => "git-init-failed",
+    });
+
+    expect(exitCode).toBe(1);
+    expect(output.stdout()).toBe("");
+    expect(JSON.parse(output.stderr())).toMatchObject({
+      error: {
+        code: GIT_INIT_ERROR_CODE,
+        correlationId: "git-init-failed",
+        suggestion:
+          "Install Git or initialize the project in a writable directory",
+        details: {
+          command: {
+            executable: "scaflow-missing-git-for-test",
+            args: ["init"],
+            cwd: directory,
+          },
+          exitCode: null,
+          spawnCode: "ENOENT",
+        },
+      },
+    });
+  });
+
+  it("validates a generated project with JSON output", async () => {
+    const directory = await temporaryDirectory("scaflow-cli-validate-");
+    expect(
+      await runCli({
+        argv: ["init", "Beauty AI"],
+        cwd: directory,
+        io: createOutput().io,
+      }),
+    ).toBe(0);
+    const output = createOutput();
+
+    const exitCode = await runCli({
+      argv: ["--json", "validate"],
+      cwd: directory,
+      io: output.io,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(output.stderr()).toBe("");
+    expect(JSON.parse(output.stdout())).toEqual({ valid: true });
+  });
+
+  it("returns structured JSON errors for invalid project config", async () => {
+    const directory = await temporaryDirectory("scaflow-cli-invalid-project-");
+    await writeFile(
+      join(directory, "scaflow.yaml"),
+      `${JSON.stringify({
+        version: 1,
+        project: { id: "beauty-ai" },
+        engine: { version: "0.1.0" },
+      })}\n`,
+    );
+    await writeFile(
+      join(directory, "repositories.yaml"),
+      `${JSON.stringify({
+        version: 1,
+        repositories: [
+          {
+            id: "app",
+            name: "Application",
+            git_url: "https://github.com/example/app.git",
+            default_branch: "main",
+            checkout_directory: "apps/app",
+            type: "application",
+          },
+        ],
+      })}\n`,
+    );
+    const output = createOutput();
+
+    const exitCode = await runCli({
+      argv: ["--json", "validate"],
+      cwd: directory,
+      io: output.io,
+      createCorrelationId: () => "invalid-project",
+    });
+
+    expect(exitCode).toBe(1);
+    expect(output.stdout()).toBe("");
+    expect(JSON.parse(output.stderr())).toMatchObject({
+      error: {
+        code: "SCHEMA_PARSE_FAILED",
+        correlationId: "invalid-project",
+        details: {
+          issues: [
+            expect.objectContaining({
+              path: ["project", "name"],
+              code: "invalid_type",
+            }),
+          ],
+        },
+      },
+    });
+  });
+
+  it("returns structured JSON errors for invalid repository manifests", async () => {
+    const directory = await temporaryDirectory("scaflow-cli-invalid-repos-");
+    await writeFile(
+      join(directory, "scaflow.yaml"),
+      `${JSON.stringify({
+        version: 1,
+        project: { id: "beauty-ai", name: "Beauty AI" },
+        engine: { version: "0.1.0" },
+      })}\n`,
+    );
+    await writeFile(
+      join(directory, "repositories.yaml"),
+      `${JSON.stringify({ version: 1, repositories: [] })}\n`,
+    );
+    const output = createOutput();
+
+    const exitCode = await runCli({
+      argv: ["--json", "validate"],
+      cwd: directory,
+      io: output.io,
+      createCorrelationId: () => "invalid-repos",
+    });
+
+    expect(exitCode).toBe(1);
+    expect(output.stdout()).toBe("");
+    expect(JSON.parse(output.stderr())).toMatchObject({
+      error: {
+        code: "SCHEMA_PARSE_FAILED",
+        correlationId: "invalid-repos",
+        details: {
+          issues: [
+            expect.objectContaining({
+              path: ["repositories"],
+              code: "too_small",
+            }),
+          ],
+        },
       },
     });
   });
