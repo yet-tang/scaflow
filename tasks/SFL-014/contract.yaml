@@ -4,7 +4,7 @@ task:
   title: Base Workspace Bootstrap
   type: workspace
   risk_level: R2
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Implement bootstrap, repository status, workspace status/sync, workspace manifest, and post-bootstrap Doctor checks.
 source_requirements:
