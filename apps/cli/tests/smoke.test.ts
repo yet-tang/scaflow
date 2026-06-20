@@ -367,6 +367,143 @@ describe("@scaflow/cli", () => {
       },
     });
   });
+
+  it("renders human doctor output with missing pre-bootstrap workspace as WARN", async () => {
+    const directory = await temporaryDirectory("scaflow-cli-doctor-human-");
+    expect(
+      await runCli({
+        argv: ["init", "Beauty AI"],
+        cwd: directory,
+        io: createOutput().io,
+      }),
+    ).toBe(0);
+    const output = createOutput();
+
+    const exitCode = await runCli({
+      argv: ["doctor"],
+      cwd: directory,
+      io: output.io,
+      dockerExecutable: "scaflow-missing-docker-for-test",
+      env: {},
+    });
+
+    expect(exitCode).toBe(0);
+    expect(output.stderr()).toBe("");
+    expect(output.stdout()).toContain("Scaflow Doctor: WARN");
+    expect(output.stdout()).toContain("[PASS] Node.js:");
+    expect(output.stdout()).toContain("[PASS] pnpm:");
+    expect(output.stdout()).toContain("[PASS] Git:");
+    expect(output.stdout()).toContain("[PASS] Scaflow Engine:");
+    expect(output.stdout()).toContain("[PASS] SPR Schema:");
+    expect(output.stdout()).toContain("[PASS] Git Access:");
+    expect(output.stdout()).toContain(
+      "[WARN] Workspace: workspace/ is not present before bootstrap",
+    );
+    expect(output.stdout()).toContain("[SKIP] Docker:");
+  });
+
+  it("renders parseable JSON doctor output with PASS, WARN, FAIL, and SKIP statuses", async () => {
+    const directory = await temporaryDirectory("scaflow-cli-doctor-json-");
+    await writeFile(
+      join(directory, "scaflow.yaml"),
+      `${JSON.stringify({
+        version: 1,
+        project: { id: "beauty-ai", name: "Beauty AI" },
+        engine: { version: "0.2.0" },
+      })}\n`,
+    );
+    await writeFile(
+      join(directory, "repositories.yaml"),
+      `${JSON.stringify({
+        version: 1,
+        repositories: [
+          {
+            id: "app",
+            name: "Application",
+            git_url: "https://github.com/example/app.git",
+            default_branch: "main",
+            checkout_directory: "apps/app",
+            type: "application",
+          },
+        ],
+      })}\n`,
+    );
+    const output = createOutput();
+
+    const exitCode = await runCli({
+      argv: ["--json", "doctor"],
+      cwd: directory,
+      io: output.io,
+      dockerExecutable: "scaflow-missing-docker-for-test",
+      env: {},
+    });
+
+    expect(exitCode).toBe(0);
+    expect(output.stderr()).toBe("");
+    const report = JSON.parse(output.stdout()) as {
+      ok: boolean;
+      status: string;
+      checks: Array<{ id: string; status: string; message: string }>;
+    };
+    expect(report.ok).toBe(false);
+    expect(report.status).toBe("FAIL");
+    expect(new Set(report.checks.map((check) => check.status))).toEqual(
+      new Set(["PASS", "WARN", "FAIL", "SKIP"]),
+    );
+    expect(report.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "spr-schema", status: "PASS" }),
+        expect.objectContaining({ id: "engine-version", status: "FAIL" }),
+        expect.objectContaining({ id: "git-access", status: "FAIL" }),
+        expect.objectContaining({ id: "workspace", status: "WARN" }),
+        expect.objectContaining({ id: "codex-environment", status: "SKIP" }),
+        expect.objectContaining({ id: "docker", status: "SKIP" }),
+      ]),
+    );
+  });
+
+  it("reports schema failures through doctor without weakening config validation", async () => {
+    const directory = await temporaryDirectory("scaflow-cli-doctor-schema-");
+    await writeFile(
+      join(directory, "scaflow.yaml"),
+      `${JSON.stringify({
+        version: 1,
+        project: { id: "beauty-ai" },
+        engine: { version: "0.1.0" },
+      })}\n`,
+    );
+    await writeFile(
+      join(directory, "repositories.yaml"),
+      `${JSON.stringify({ version: 1, repositories: [] })}\n`,
+    );
+    const output = createOutput();
+
+    const exitCode = await runCli({
+      argv: ["--json", "doctor"],
+      cwd: directory,
+      io: output.io,
+      dockerExecutable: "scaflow-missing-docker-for-test",
+      env: {},
+    });
+
+    expect(exitCode).toBe(0);
+    const report = JSON.parse(output.stdout()) as {
+      status: string;
+      checks: Array<{ id: string; status: string; details?: unknown }>;
+    };
+    expect(report.status).toBe("FAIL");
+    expect(report.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "spr-schema",
+          status: "FAIL",
+          details: expect.objectContaining({
+            code: "SCHEMA_PARSE_FAILED",
+          }),
+        }),
+      ]),
+    );
+  });
 });
 
 function createOutput(): {

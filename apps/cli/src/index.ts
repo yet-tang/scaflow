@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { access } from "node:fs/promises";
+import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
@@ -26,6 +28,9 @@ export interface CliProgramOptions {
   createCorrelationId?: () => string;
   cwd?: string;
   gitExecutable?: string;
+  pnpmExecutable?: string;
+  dockerExecutable?: string;
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface CliRunOptions extends CliProgramOptions {
@@ -57,6 +62,9 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
   const io = options.io ?? DEFAULT_IO;
   const cwd = options.cwd ?? process.cwd();
   const gitExecutable = options.gitExecutable ?? "git";
+  const pnpmExecutable = options.pnpmExecutable ?? "pnpm";
+  const dockerExecutable = options.dockerExecutable ?? "docker";
+  const env = options.env ?? process.env;
   const program = new Command()
     .name(CLI_NAME)
     .description("Scaflow Execution Kernel")
@@ -85,6 +93,17 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
       }
       if (name === "validate") {
         registerValidate(program, cwd, io, options.createCorrelationId);
+        continue;
+      }
+      if (name === "doctor") {
+        registerDoctor(program, {
+          cwd,
+          io,
+          gitExecutable,
+          pnpmExecutable,
+          dockerExecutable,
+          env,
+        });
         continue;
       }
       registerStub(program, name, options.createCorrelationId);
@@ -263,6 +282,31 @@ interface StructuredCommandResult {
   readonly spawnError?: NodeJS.ErrnoException;
 }
 
+type DoctorStatus = "PASS" | "WARN" | "FAIL" | "SKIP";
+
+interface DoctorCheck {
+  readonly id: string;
+  readonly label: string;
+  readonly status: DoctorStatus;
+  readonly message: string;
+  readonly details?: unknown;
+}
+
+interface DoctorReport {
+  readonly ok: boolean;
+  readonly status: DoctorStatus;
+  readonly checks: readonly DoctorCheck[];
+}
+
+interface DoctorOptions {
+  readonly cwd: string;
+  readonly io: CliIo;
+  readonly gitExecutable: string;
+  readonly pnpmExecutable: string;
+  readonly dockerExecutable: string;
+  readonly env: NodeJS.ProcessEnv;
+}
+
 async function runStructuredCommand(
   command: StructuredCommand,
 ): Promise<StructuredCommandResult> {
@@ -350,6 +394,319 @@ function registerValidate(
     });
 }
 
+function registerDoctor(parent: Command, options: DoctorOptions): void {
+  parent
+    .command("doctor")
+    .description("check the local Scaflow development environment")
+    .action(async () => {
+      const report = await runDoctor(options);
+
+      if (parent.opts().json === true) {
+        options.io.stdout.write(`${JSON.stringify(report)}\n`);
+        return;
+      }
+
+      options.io.stdout.write(renderDoctorHuman(report));
+    });
+}
+
+async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
+  const config = await validateDoctorConfig(options.cwd);
+  const checks: DoctorCheck[] = [
+    checkNodeVersion(),
+    await checkCommand("pnpm", "pnpm", options.pnpmExecutable, ["--version"], options.cwd),
+    await checkCommand("git", "Git", options.gitExecutable, ["--version"], options.cwd),
+    config.schemaCheck,
+    checkEngineVersion(config.projectConfig),
+    await checkControlRepository(options.cwd),
+    await checkWorkspace(options.cwd),
+    checkCodexEnvironment(options.env),
+    await checkDocker(options.cwd, options.dockerExecutable),
+  ];
+
+  const status = aggregateDoctorStatus(checks);
+  return {
+    ok: status !== "FAIL",
+    status,
+    checks,
+  };
+}
+
+function checkNodeVersion(): DoctorCheck {
+  const major = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10);
+
+  if (Number.isInteger(major) && major >= 22) {
+    return {
+      id: "node",
+      label: "Node.js",
+      status: "PASS",
+      message: `Node.js ${process.versions.node} satisfies >=22`,
+    };
+  }
+
+  return {
+    id: "node",
+    label: "Node.js",
+    status: "FAIL",
+    message: `Node.js ${process.versions.node} does not satisfy >=22`,
+  };
+}
+
+async function checkCommand(
+  id: string,
+  label: string,
+  executable: string,
+  args: readonly string[],
+  cwd: string,
+): Promise<DoctorCheck> {
+  const result = await runStructuredCommand({ executable, args, cwd });
+  if (result.exitCode === 0) {
+    return {
+      id,
+      label,
+      status: "PASS",
+      message: `${label} is available`,
+      details: { executable, args },
+    };
+  }
+
+  return {
+    id,
+    label,
+    status: "FAIL",
+    message:
+      result.spawnError === undefined
+        ? `${label} command failed`
+        : `${label} executable was not found`,
+    details: {
+      executable,
+      args,
+      exitCode: result.exitCode,
+      signal: result.signal,
+      stderr: result.stderr,
+      spawnCode: result.spawnError?.code,
+    },
+  };
+}
+
+async function validateDoctorConfig(cwd: string): Promise<{
+  readonly schemaCheck: DoctorCheck;
+  readonly projectConfig?: unknown;
+}> {
+  const config = await loadConfigModule();
+  try {
+    const result = await config.validateLocalProject(cwd, {});
+    return {
+      schemaCheck: {
+        id: "spr-schema",
+        label: "SPR Schema",
+        status: "PASS",
+        message: "Scaflow project configuration is valid",
+      },
+      projectConfig: readProjectConfig(result),
+    };
+  } catch (error) {
+    return {
+      schemaCheck: {
+        id: "spr-schema",
+        label: "SPR Schema",
+        status: "FAIL",
+        message: error instanceof Error ? error.message : "Schema validation failed",
+        details: serializeDoctorError(error),
+      },
+    };
+  }
+}
+
+function checkEngineVersion(projectConfig: unknown): DoctorCheck {
+  const engineVersion = readEngineVersion(projectConfig);
+  if (engineVersion === "0.1.0") {
+    return {
+      id: "engine-version",
+      label: "Scaflow Engine",
+      status: "PASS",
+      message: "Scaflow Engine version is pinned to 0.1.0",
+      details: { expected: "0.1.0", actual: engineVersion },
+    };
+  }
+
+  return {
+    id: "engine-version",
+    label: "Scaflow Engine",
+    status: "FAIL",
+    message:
+      engineVersion === undefined
+        ? "Scaflow Engine version could not be read"
+        : `Scaflow Engine version ${engineVersion} does not match 0.1.0`,
+    details: { expected: "0.1.0", actual: engineVersion },
+  };
+}
+
+async function checkControlRepository(cwd: string): Promise<DoctorCheck> {
+  const git = await loadGitModule();
+  try {
+    await git.getRepositoryStatus({ cwd });
+    return {
+      id: "git-access",
+      label: "Git Access",
+      status: "PASS",
+      message: "SPR Git repository is accessible",
+    };
+  } catch (error) {
+    return {
+      id: "git-access",
+      label: "Git Access",
+      status: "FAIL",
+      message: error instanceof Error ? error.message : "SPR Git repository is not accessible",
+      details: serializeDoctorError(error),
+    };
+  }
+}
+
+async function checkWorkspace(cwd: string): Promise<DoctorCheck> {
+  try {
+    await access(join(cwd, "workspace"));
+    return {
+      id: "workspace",
+      label: "Workspace",
+      status: "PASS",
+      message: "workspace/ is present",
+    };
+  } catch (error) {
+    return {
+      id: "workspace",
+      label: "Workspace",
+      status: "WARN",
+      message: "workspace/ is not present before bootstrap",
+      details: serializeDoctorError(error),
+    };
+  }
+}
+
+function checkCodexEnvironment(env: NodeJS.ProcessEnv): DoctorCheck {
+  if (env.OPENAI_API_KEY !== undefined || env.CODEX_HOME !== undefined) {
+    return {
+      id: "codex-environment",
+      label: "Codex Environment",
+      status: "PASS",
+      message: "Codex-related environment is present",
+      details: {
+        openaiApiKey: env.OPENAI_API_KEY === undefined ? "absent" : "present",
+        codexHome: env.CODEX_HOME === undefined ? "absent" : "present",
+      },
+    };
+  }
+
+  return {
+    id: "codex-environment",
+    label: "Codex Environment",
+    status: "SKIP",
+    message: "No Codex environment variables are present for local Doctor checks",
+  };
+}
+
+async function checkDocker(cwd: string, executable: string): Promise<DoctorCheck> {
+  const result = await runStructuredCommand({
+    executable,
+    args: ["--version"],
+    cwd,
+  });
+  if (result.exitCode === 0) {
+    return {
+      id: "docker",
+      label: "Docker",
+      status: "PASS",
+      message: "Docker is available",
+      details: { executable, args: ["--version"] },
+    };
+  }
+
+  return {
+    id: "docker",
+    label: "Docker",
+    status: "SKIP",
+    message:
+      result.spawnError === undefined
+        ? "Optional Docker check was skipped because Docker is unavailable"
+        : "Optional Docker check was skipped because Docker was not found",
+    details: {
+      executable,
+      exitCode: result.exitCode,
+      signal: result.signal,
+      stderr: result.stderr,
+      spawnCode: result.spawnError?.code,
+    },
+  };
+}
+
+function aggregateDoctorStatus(checks: readonly DoctorCheck[]): DoctorStatus {
+  if (checks.some((check) => check.status === "FAIL")) {
+    return "FAIL";
+  }
+  if (checks.some((check) => check.status === "WARN")) {
+    return "WARN";
+  }
+  if (checks.some((check) => check.status === "PASS")) {
+    return "PASS";
+  }
+  return "SKIP";
+}
+
+function renderDoctorHuman(report: DoctorReport): string {
+  const lines = [
+    `Scaflow Doctor: ${report.status}`,
+    ...report.checks.map(
+      (check) => `[${check.status}] ${check.label}: ${check.message}`,
+    ),
+    "",
+  ];
+  return lines.join("\n");
+}
+
+function readProjectConfig(result: unknown): unknown {
+  if (
+    typeof result === "object" &&
+    result !== null &&
+    "projectConfig" in result
+  ) {
+    return result.projectConfig;
+  }
+  return undefined;
+}
+
+function readEngineVersion(projectConfig: unknown): string | undefined {
+  if (
+    typeof projectConfig !== "object" ||
+    projectConfig === null ||
+    !("engine" in projectConfig)
+  ) {
+    return undefined;
+  }
+  const engine = projectConfig.engine;
+  if (
+    typeof engine !== "object" ||
+    engine === null ||
+    !("version" in engine) ||
+    typeof engine.version !== "string"
+  ) {
+    return undefined;
+  }
+  return engine.version;
+}
+
+function serializeDoctorError(error: unknown): unknown {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      ...("code" in error ? { code: error.code } : {}),
+      ...("details" in error ? { details: error.details } : {}),
+      ...("issues" in error ? { issues: error.issues } : {}),
+    };
+  }
+  return { message: String(error) };
+}
+
 function getCommandPath(command: Command): string {
   const names: string[] = [];
   for (
@@ -403,6 +760,12 @@ interface ConfigModule {
   ) => Promise<unknown>;
 }
 
+interface GitModule {
+  readonly getRepositoryStatus: (options: {
+    readonly cwd: string;
+  }) => Promise<unknown>;
+}
+
 function isScaflowErrorLike(caught: unknown): caught is ScaflowError {
   return (
     caught instanceof ScaflowError ||
@@ -423,7 +786,11 @@ async function loadConfigModule(): Promise<ConfigModule> {
   return (await import(workspaceModuleUrl("config"))) as ConfigModule;
 }
 
-function workspaceModuleUrl(packageName: "config" | "template"): string {
+async function loadGitModule(): Promise<GitModule> {
+  return (await import(workspaceModuleUrl("git"))) as GitModule;
+}
+
+function workspaceModuleUrl(packageName: "config" | "git" | "template"): string {
   const currentPath = fileURLToPath(import.meta.url);
   const modulePath = currentPath.includes("/src/")
     ? `../../../packages/${packageName}/src/index.ts`
