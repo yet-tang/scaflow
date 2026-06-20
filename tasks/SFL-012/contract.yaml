@@ -4,7 +4,7 @@ task:
   title: Git Adapter and Repository Identity
   type: git
   risk_level: R2
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Provide explicit-cwd Git operations and repository identity checks for later workspace, revision, diff, and commit tasks.
 source_requirements:
