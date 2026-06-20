@@ -106,12 +106,28 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         });
         continue;
       }
+      if (name === "bootstrap") {
+        registerBootstrap(program, cwd, io);
+        continue;
+      }
       registerStub(program, name, options.createCorrelationId);
       continue;
     }
 
     const group = program.command(name).description(`${name} commands`);
     for (const child of children) {
+      if (name === "repo" && child === "status") {
+        registerRepoStatus(group, cwd, io);
+        continue;
+      }
+      if (name === "workspace" && child === "status") {
+        registerWorkspaceStatus(group, cwd, io);
+        continue;
+      }
+      if (name === "workspace" && child === "sync") {
+        registerWorkspaceSync(group, cwd, io);
+        continue;
+      }
       registerStub(group, child, options.createCorrelationId);
     }
   }
@@ -394,6 +410,86 @@ function registerValidate(
     });
 }
 
+function registerBootstrap(parent: Command, cwd: string, io: CliIo): void {
+  parent
+    .command("bootstrap")
+    .description("initialize or update workspace/repositories")
+    .action(async () => {
+      const [config, workspace] = await Promise.all([
+        loadConfigModule(),
+        loadWorkspaceModule(),
+      ]);
+      const localProject = await config.validateLocalProject(cwd, {});
+      const result = await workspace.bootstrapWorkspace(
+        cwd,
+        readRepositoryManifest(localProject),
+      );
+
+      if (parent.opts().json === true) {
+        io.stdout.write(`${JSON.stringify(result)}\n`);
+        return;
+      }
+
+      io.stdout.write(renderWorkspaceOperationHuman("Scaflow Bootstrap", result));
+    });
+}
+
+function registerRepoStatus(parent: Command, cwd: string, io: CliIo): void {
+  parent
+    .command("status")
+    .description("show configured repository checkout status")
+    .action(async () => {
+      const result = await readWorkspaceStatus(cwd);
+
+      if (parent.parent?.opts().json === true) {
+        io.stdout.write(`${JSON.stringify({ repositories: result.repositories })}\n`);
+        return;
+      }
+
+      io.stdout.write(renderRepositoryStatusHuman(result.repositories));
+    });
+}
+
+function registerWorkspaceStatus(parent: Command, cwd: string, io: CliIo): void {
+  parent
+    .command("status")
+    .description("show workspace status")
+    .action(async () => {
+      const result = await readWorkspaceStatus(cwd);
+
+      if (parent.parent?.opts().json === true) {
+        io.stdout.write(`${JSON.stringify(result)}\n`);
+        return;
+      }
+
+      io.stdout.write(renderWorkspaceStatusHuman(result));
+    });
+}
+
+function registerWorkspaceSync(parent: Command, cwd: string, io: CliIo): void {
+  parent
+    .command("sync")
+    .description("fetch existing workspace repositories")
+    .action(async () => {
+      const [config, workspace] = await Promise.all([
+        loadConfigModule(),
+        loadWorkspaceModule(),
+      ]);
+      const localProject = await config.validateLocalProject(cwd, {});
+      const result = await workspace.bootstrapWorkspace(
+        cwd,
+        readRepositoryManifest(localProject),
+      );
+
+      if (parent.parent?.opts().json === true) {
+        io.stdout.write(`${JSON.stringify(result)}\n`);
+        return;
+      }
+
+      io.stdout.write(renderWorkspaceOperationHuman("Scaflow Workspace Sync", result));
+    });
+}
+
 function registerDoctor(parent: Command, options: DoctorOptions): void {
   parent
     .command("doctor")
@@ -412,6 +508,16 @@ function registerDoctor(parent: Command, options: DoctorOptions): void {
 
 async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   const config = await validateDoctorConfig(options.cwd);
+  const workspaceChecks =
+    config.repositoryManifest === undefined
+      ? [await checkWorkspace(options.cwd)]
+      : [
+          await checkWorkspace(options.cwd),
+          ...(await checkPostBootstrapWorkspace(
+            options.cwd,
+            config.repositoryManifest,
+          )),
+        ];
   const checks: DoctorCheck[] = [
     checkNodeVersion(),
     await checkCommand("pnpm", "pnpm", options.pnpmExecutable, ["--version"], options.cwd),
@@ -419,7 +525,7 @@ async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     config.schemaCheck,
     checkEngineVersion(config.projectConfig),
     await checkControlRepository(options.cwd),
-    await checkWorkspace(options.cwd),
+    ...workspaceChecks,
     checkCodexEnvironment(options.env),
     await checkDocker(options.cwd, options.dockerExecutable),
   ];
@@ -492,6 +598,7 @@ async function checkCommand(
 async function validateDoctorConfig(cwd: string): Promise<{
   readonly schemaCheck: DoctorCheck;
   readonly projectConfig?: unknown;
+  readonly repositoryManifest?: unknown;
 }> {
   const config = await loadConfigModule();
   try {
@@ -504,6 +611,7 @@ async function validateDoctorConfig(cwd: string): Promise<{
         message: "Scaflow project configuration is valid",
       },
       projectConfig: readProjectConfig(result),
+      repositoryManifest: readRepositoryManifest(result),
     };
   } catch (error) {
     return {
@@ -581,6 +689,74 @@ async function checkWorkspace(cwd: string): Promise<DoctorCheck> {
       details: serializeDoctorError(error),
     };
   }
+}
+
+async function checkPostBootstrapWorkspace(
+  cwd: string,
+  repositoryManifest: unknown,
+): Promise<DoctorCheck[]> {
+  const workspace = await loadWorkspaceModule();
+  const checks: DoctorCheck[] = [];
+
+  try {
+    const manifest = await workspace.readWorkspaceManifest(cwd);
+    checks.push({
+      id: "workspace-manifest",
+      label: "Workspace Manifest",
+      status: "PASS",
+      message: "workspace manifest is present and readable",
+      details: {
+        repositories: manifest.repositories.map((repository) => repository.id),
+      },
+    });
+  } catch (error) {
+    checks.push({
+      id: "workspace-manifest",
+      label: "Workspace Manifest",
+      status: "SKIP",
+      message: "workspace manifest is not present before bootstrap",
+      details: serializeDoctorError(error),
+    });
+    return checks;
+  }
+
+  const status = await workspace.getWorkspaceStatus(
+    cwd,
+    readRepositoryManifest({ repositoryManifest }),
+  );
+  for (const repository of status.repositories) {
+    checks.push({
+      id: `repository-identity:${repository.id}`,
+      label: `Repository Identity (${repository.id})`,
+      status: repository.identity === "matching" ? "PASS" : "FAIL",
+      message:
+        repository.identity === "matching"
+          ? "repository remote matches repositories.yaml"
+          : `repository identity is ${repository.identity}`,
+      details: repository,
+    });
+    checks.push({
+      id: `repository-health:${repository.id}`,
+      label: `Repository Health (${repository.id})`,
+      status:
+        repository.state === "failed" || repository.state === "missing"
+          ? "FAIL"
+          : repository.clean === false
+            ? "WARN"
+            : "PASS",
+      message:
+        repository.state === "missing"
+          ? "repository checkout is missing"
+          : repository.state === "failed"
+            ? "repository checkout is unhealthy"
+            : repository.clean === false
+              ? "repository has uncommitted changes"
+              : "repository checkout is healthy",
+      details: repository,
+    });
+  }
+
+  return checks;
 }
 
 function checkCodexEnvironment(env: NodeJS.ProcessEnv): DoctorCheck {
@@ -663,6 +839,58 @@ function renderDoctorHuman(report: DoctorReport): string {
   return lines.join("\n");
 }
 
+async function readWorkspaceStatus(cwd: string): Promise<WorkspaceStatusResult> {
+  const [config, workspace] = await Promise.all([
+    loadConfigModule(),
+    loadWorkspaceModule(),
+  ]);
+  const localProject = await config.validateLocalProject(cwd, {});
+  return await workspace.getWorkspaceStatus(
+    cwd,
+    readRepositoryManifest(localProject),
+  );
+}
+
+function renderWorkspaceOperationHuman(
+  title: string,
+  result: BootstrapWorkspaceResult,
+): string {
+  return [
+    `${title}: ${result.ok ? "PASS" : "FAIL"}`,
+    ...result.repositories.map(
+      (repository) =>
+        `[${repository.state.toUpperCase()}] ${repository.id}: ${repository.action}`,
+    ),
+    `Manifest: ${result.manifestPath}`,
+    "",
+  ].join("\n");
+}
+
+function renderWorkspaceStatusHuman(result: WorkspaceStatusResult): string {
+  return [
+    `Scaflow Workspace: ${result.ok ? "PASS" : "FAIL"}`,
+    `Manifest: ${result.manifestPresent ? result.manifestPath : "missing"}`,
+    ...result.repositories.map(
+      (repository) =>
+        `[${repository.state.toUpperCase()}] ${repository.id}: ${repository.identity}`,
+    ),
+    "",
+  ].join("\n");
+}
+
+function renderRepositoryStatusHuman(
+  repositories: readonly WorkspaceRepositoryResult[],
+): string {
+  return [
+    "Scaflow Repository Status",
+    ...repositories.map((repository) => {
+      const clean = repository.clean === undefined ? "unknown" : String(repository.clean);
+      return `[${repository.state.toUpperCase()}] ${repository.id}: identity=${repository.identity} clean=${clean}`;
+    }),
+    "",
+  ].join("\n");
+}
+
 function readProjectConfig(result: unknown): unknown {
   if (
     typeof result === "object" &&
@@ -670,6 +898,17 @@ function readProjectConfig(result: unknown): unknown {
     "projectConfig" in result
   ) {
     return result.projectConfig;
+  }
+  return undefined;
+}
+
+function readRepositoryManifest(result: unknown): unknown {
+  if (
+    typeof result === "object" &&
+    result !== null &&
+    "repositoryManifest" in result
+  ) {
+    return result.repositoryManifest;
   }
   return undefined;
 }
@@ -760,6 +999,45 @@ interface ConfigModule {
   ) => Promise<unknown>;
 }
 
+interface BootstrapWorkspaceResult {
+  readonly ok: boolean;
+  readonly manifestPath: string;
+  readonly repositories: readonly WorkspaceRepositoryResult[];
+}
+
+interface WorkspaceStatusResult {
+  readonly ok: boolean;
+  readonly manifestPath: string;
+  readonly manifestPresent: boolean;
+  readonly repositories: readonly WorkspaceRepositoryResult[];
+}
+
+interface WorkspaceRepositoryResult {
+  readonly id: string;
+  readonly state: string;
+  readonly action: string;
+  readonly identity: string;
+  readonly clean?: boolean;
+}
+
+interface WorkspaceManifest {
+  readonly repositories: readonly { readonly id: string }[];
+}
+
+interface WorkspaceModule {
+  readonly bootstrapWorkspace: (
+    projectDirectory: string,
+    manifest: unknown,
+  ) => Promise<BootstrapWorkspaceResult>;
+  readonly getWorkspaceStatus: (
+    projectDirectory: string,
+    manifest: unknown,
+  ) => Promise<WorkspaceStatusResult>;
+  readonly readWorkspaceManifest: (
+    projectDirectory: string,
+  ) => Promise<WorkspaceManifest>;
+}
+
 interface GitModule {
   readonly getRepositoryStatus: (options: {
     readonly cwd: string;
@@ -790,7 +1068,11 @@ async function loadGitModule(): Promise<GitModule> {
   return (await import(workspaceModuleUrl("git"))) as GitModule;
 }
 
-function workspaceModuleUrl(packageName: "config" | "git" | "template"): string {
+async function loadWorkspaceModule(): Promise<WorkspaceModule> {
+  return (await import(workspaceModuleUrl("workspace"))) as WorkspaceModule;
+}
+
+function workspaceModuleUrl(packageName: "config" | "git" | "template" | "workspace"): string {
   const currentPath = fileURLToPath(import.meta.url);
   const modulePath = currentPath.includes("/src/")
     ? `../../../packages/${packageName}/src/index.ts`

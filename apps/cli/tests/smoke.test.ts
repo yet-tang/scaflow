@@ -1,6 +1,8 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import { ScaflowError } from "@scaflow/core";
 import { afterEach, describe, expect, it } from "vitest";
@@ -15,6 +17,7 @@ import {
   runCli,
 } from "../src/index";
 
+const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
 
 async function temporaryDirectory(prefix: string): Promise<string> {
@@ -99,8 +102,8 @@ describe("@scaflow/cli", () => {
   });
 
   it.each([
-    ["before", ["--json", "workspace", "sync"]],
-    ["after", ["workspace", "sync", "--json"]],
+    ["before", ["--json", "changeset", "show"]],
+    ["after", ["changeset", "show", "--json"]],
   ])("renders valid JSON errors when --json appears %s the command", async (
     _position,
     argv,
@@ -119,12 +122,12 @@ describe("@scaflow/cli", () => {
       error: {
         name: "ScaflowError",
         message:
-          'Command "workspace sync" is not implemented in Scaflow v0.1.0 yet',
+          'Command "changeset show" is not implemented in Scaflow v0.1.0 yet',
         code: NOT_IMPLEMENTED_ERROR_CODE,
         recoverable: false,
         correlationId: "test-json-error",
         suggestion: "Use --help to inspect the available command surface",
-        details: { command: "workspace sync" },
+        details: { command: "changeset show" },
       },
     });
   });
@@ -504,6 +507,99 @@ describe("@scaflow/cli", () => {
       ]),
     );
   });
+
+  it("bootstraps workspace repositories and reports post-bootstrap doctor checks", async () => {
+    const fixture = await createCliProjectWithRemote("scaflow-cli-bootstrap-");
+    const bootstrapOutput = createOutput();
+
+    const bootstrapExitCode = await runCli({
+      argv: ["--json", "bootstrap"],
+      cwd: fixture.projectDir,
+      io: bootstrapOutput.io,
+    });
+
+    expect(bootstrapExitCode).toBe(0);
+    expect(bootstrapOutput.stderr()).toBe("");
+    const bootstrap = JSON.parse(bootstrapOutput.stdout()) as {
+      ok: boolean;
+      repositories: Array<{ id: string; action: string; state: string }>;
+    };
+    expect(bootstrap).toMatchObject({
+      ok: true,
+      repositories: [{ id: "app", action: "clone", state: "cloned" }],
+    });
+    await expect(
+      readFile(join(fixture.projectDir, "workspace", "manifest.json"), "utf8"),
+    ).resolves.toContain('"id": "app"');
+
+    const doctorOutput = createOutput();
+    const doctorExitCode = await runCli({
+      argv: ["--json", "doctor"],
+      cwd: fixture.projectDir,
+      io: doctorOutput.io,
+      dockerExecutable: "scaflow-missing-docker-for-test",
+      env: { CODEX_HOME: fixture.projectDir },
+    });
+
+    expect(doctorExitCode).toBe(0);
+    const doctor = JSON.parse(doctorOutput.stdout()) as {
+      status: string;
+      checks: Array<{ id: string; status: string }>;
+    };
+    expect(doctor.status).toBe("PASS");
+    expect(doctor.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "workspace-manifest",
+          status: "PASS",
+        }),
+        expect.objectContaining({
+          id: "repository-identity:app",
+          status: "PASS",
+        }),
+        expect.objectContaining({
+          id: "repository-health:app",
+          status: "PASS",
+        }),
+      ]),
+    );
+  });
+
+  it("renders repository and workspace status for bootstrapped projects", async () => {
+    const fixture = await createCliProjectWithRemote("scaflow-cli-status-");
+    expect(
+      await runCli({
+        argv: ["bootstrap"],
+        cwd: fixture.projectDir,
+        io: createOutput().io,
+      }),
+    ).toBe(0);
+
+    const repoOutput = createOutput();
+    expect(
+      await runCli({
+        argv: ["repo", "status"],
+        cwd: fixture.projectDir,
+        io: repoOutput.io,
+      }),
+    ).toBe(0);
+    expect(repoOutput.stdout()).toContain("Scaflow Repository Status");
+    expect(repoOutput.stdout()).toContain("[FETCHED] app:");
+
+    const workspaceOutput = createOutput();
+    expect(
+      await runCli({
+        argv: ["--json", "workspace", "status"],
+        cwd: fixture.projectDir,
+        io: workspaceOutput.io,
+      }),
+    ).toBe(0);
+    expect(JSON.parse(workspaceOutput.stdout())).toMatchObject({
+      ok: true,
+      manifestPresent: true,
+      repositories: [{ id: "app", identity: "matching" }],
+    });
+  });
 });
 
 function createOutput(): {
@@ -535,4 +631,65 @@ function createOutput(): {
     stdout: () => stdout.join(""),
     stderr: () => stderr.join(""),
   };
+}
+
+async function createCliProjectWithRemote(prefix: string): Promise<{
+  readonly rootDir: string;
+  readonly projectDir: string;
+  readonly remoteDir: string;
+}> {
+  const rootDir = await temporaryDirectory(prefix);
+  const projectDir = join(rootDir, "project");
+  const sourceDir = join(rootDir, "source");
+  const remoteDir = join(rootDir, "remote.git");
+
+  await mkdir(projectDir);
+  await mkdir(sourceDir);
+  await git(sourceDir, "init");
+  await git(sourceDir, "config", "user.name", "Scaflow Test");
+  await git(sourceDir, "config", "user.email", "scaflow@example.invalid");
+  await writeFile(join(sourceDir, "README.md"), "# app\n");
+  await git(sourceDir, "add", "README.md");
+  await git(sourceDir, "commit", "-m", "Initial commit");
+  await git(sourceDir, "init", "--bare", remoteDir);
+  await git(sourceDir, "remote", "add", "origin", remoteDir);
+  await git(sourceDir, "push", "origin", "HEAD:main");
+
+  await writeFile(
+    join(projectDir, "scaflow.yaml"),
+    `${JSON.stringify({
+      version: 1,
+      project: { id: "beauty-ai", name: "Beauty AI" },
+      engine: { version: "0.1.0" },
+    })}\n`,
+  );
+  await writeFile(
+    join(projectDir, "repositories.yaml"),
+    `${JSON.stringify({
+      version: 1,
+      repositories: [
+        {
+          id: "app",
+          name: "Application",
+          git_url: remoteDir,
+          default_branch: "main",
+          checkout_directory: "app",
+          type: "application",
+        },
+      ],
+    })}\n`,
+  );
+  await git(projectDir, "init");
+
+  return { rootDir, projectDir, remoteDir };
+}
+
+async function git(cwd: string, ...args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", args, {
+    cwd,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+
+  return stdout;
 }
