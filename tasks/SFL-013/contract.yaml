@@ -4,7 +4,7 @@ task:
   title: Scaflow Doctor
   type: cli
   risk_level: R2
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Implement Doctor framework and pre-bootstrap checks with PASS, WARN, FAIL, SKIP, and JSON output.
 source_requirements:
