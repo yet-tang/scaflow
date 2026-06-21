@@ -4,7 +4,7 @@ task:
   title: Task Contract Implementation
   type: schema
   risk_level: R2
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Implement Task Contract schema and task list, show, and validate commands.
 source_requirements:
