@@ -4,7 +4,7 @@ task:
   title: Revision Set
   type: git
   risk_level: R2
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Freeze the SPR and scoped application repositories into an immutable TaskRun Revision Set.
 source_requirements:
