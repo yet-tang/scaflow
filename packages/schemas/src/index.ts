@@ -33,6 +33,15 @@ export {
   type RepositoryManifestEntry,
 } from "./repository-manifest.js";
 export {
+  revisionSetApplicationRepositorySchema,
+  revisionSetControlRepositorySchema,
+  revisionSetSchema,
+  type RevisionSet,
+  type RevisionSetApplicationRepository,
+  type RevisionSetControlRepository,
+  type RevisionSetIdentity,
+} from "./revision-set.js";
+export {
   taskContractRepositoryScopeSchema,
   taskContractSchema,
   taskContractVerificationCommandSchema,

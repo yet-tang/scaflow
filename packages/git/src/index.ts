@@ -8,6 +8,7 @@ export const packageName = "@scaflow/git";
 export type GitOperation =
   | "clone"
   | "fetch"
+  | "freeze-revision"
   | "head"
   | "identity"
   | "remote-url"
@@ -87,6 +88,23 @@ export interface RepositoryIdentityOptions {
   expectedUrl: string;
 }
 
+export type RepositoryAccessMode = "read-only" | "read-write";
+
+export interface FreezeRepositoryRevisionOptions {
+  id: string;
+  cwd: string;
+  access: RepositoryAccessMode;
+  expectedUrl: string;
+  defaultBranch: string;
+  checkoutDirectory: string;
+  remote?: string;
+}
+
+export interface FreezeRevisionSetOptions {
+  control: FreezeRepositoryRevisionOptions & { id: "@control" };
+  repositories: readonly FreezeRepositoryRevisionOptions[];
+}
+
 export interface RepositoryStatus {
   clean: boolean;
   porcelain: string;
@@ -122,6 +140,25 @@ export type RepositoryIdentityResult =
       expectedUrl: string;
       error: GitError;
     };
+
+export interface FrozenRepositoryRevision {
+  readonly id: string;
+  readonly base_commit: string;
+  readonly access: RepositoryAccessMode;
+  readonly default_branch: string;
+  readonly checkout_directory: string;
+  readonly identity: {
+    readonly remote: string;
+    readonly expected_url: string;
+    readonly actual_url: string;
+  };
+}
+
+export interface FrozenRevisionSet {
+  readonly version: 1;
+  readonly control: FrozenRepositoryRevision & { readonly id: "@control" };
+  readonly repositories: readonly FrozenRepositoryRevision[];
+}
 
 interface RunGitOptions {
   operation: GitOperation;
@@ -270,6 +307,55 @@ export async function checkRepositoryIdentity(
     }
     throw error;
   }
+}
+
+export async function freezeRepositoryRevision(
+  options: FreezeRepositoryRevisionOptions,
+): Promise<FrozenRepositoryRevision> {
+  assertExplicitDirectory(options.cwd, "cwd", "freeze-revision");
+
+  const remote = options.remote ?? DEFAULT_REMOTE;
+  const identity = await checkRepositoryIdentity({
+    cwd: options.cwd,
+    remote,
+    expectedUrl: options.expectedUrl,
+  });
+  if (identity.status !== "matching") {
+    throw identity.error;
+  }
+
+  const baseCommit = await getHeadCommit({ cwd: options.cwd });
+
+  return {
+    id: options.id,
+    base_commit: baseCommit,
+    access: options.access,
+    default_branch: options.defaultBranch,
+    checkout_directory: options.checkoutDirectory,
+    identity: {
+      remote,
+      expected_url: options.expectedUrl,
+      actual_url: identity.actualUrl,
+    },
+  };
+}
+
+export async function freezeRevisionSet(
+  options: FreezeRevisionSetOptions,
+): Promise<FrozenRevisionSet> {
+  const control = await freezeRepositoryRevision(options.control);
+  return {
+    version: 1,
+    control: {
+      ...control,
+      id: "@control",
+    },
+    repositories: await Promise.all(
+      options.repositories.map((repository) =>
+        freezeRepositoryRevision(repository),
+      ),
+    ),
+  };
 }
 
 export function serializeGitError(error: GitError): SerializedGitError {

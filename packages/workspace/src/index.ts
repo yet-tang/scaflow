@@ -27,6 +27,24 @@ export interface RepositoryManifestLike {
   readonly repositories: readonly RepositoryManifestEntryLike[];
 }
 
+export type RepositoryAccessMode = "read-only" | "read-write";
+
+export interface TaskRepositoryScopeLike {
+  readonly repository: string;
+  readonly access: RepositoryAccessMode;
+}
+
+export interface FreezeWorkspaceRevisionSetOptions {
+  readonly control: {
+    readonly cwd?: string;
+    readonly expectedUrl: string;
+    readonly defaultBranch: string;
+    readonly checkoutDirectory?: string;
+  };
+  readonly manifest: RepositoryManifestLike;
+  readonly scopes: readonly TaskRepositoryScopeLike[];
+}
+
 export interface WorkspaceRepositoryResult {
   readonly id: string;
   readonly checkoutDirectory: string;
@@ -83,6 +101,25 @@ export interface WorkspaceManifestRepository {
   };
 }
 
+export interface WorkspaceRevisionSetRepository {
+  readonly id: string;
+  readonly base_commit: string;
+  readonly access: RepositoryAccessMode;
+  readonly default_branch: string;
+  readonly checkout_directory: string;
+  readonly identity: {
+    readonly remote: string;
+    readonly expected_url: string;
+    readonly actual_url: string;
+  };
+}
+
+export interface WorkspaceRevisionSet {
+  readonly version: 1;
+  readonly control: WorkspaceRevisionSetRepository & { readonly id: "@control" };
+  readonly repositories: readonly WorkspaceRevisionSetRepository[];
+}
+
 export interface SerializedWorkspaceError {
   readonly name: string;
   readonly message: string;
@@ -106,6 +143,24 @@ interface GitModule {
     readonly targetDir: string;
   }) => Promise<void>;
   readonly fetchRepository: (options: { readonly cwd: string }) => Promise<void>;
+  readonly freezeRevisionSet: (options: {
+    readonly control: {
+      readonly id: "@control";
+      readonly cwd: string;
+      readonly access: RepositoryAccessMode;
+      readonly expectedUrl: string;
+      readonly defaultBranch: string;
+      readonly checkoutDirectory: string;
+    };
+    readonly repositories: readonly {
+      readonly id: string;
+      readonly cwd: string;
+      readonly access: RepositoryAccessMode;
+      readonly expectedUrl: string;
+      readonly defaultBranch: string;
+      readonly checkoutDirectory: string;
+    }[];
+  }) => Promise<WorkspaceRevisionSet>;
   readonly getHeadCommit: (options: { readonly cwd: string }) => Promise<string>;
   readonly getRepositoryStatus: (options: {
     readonly cwd: string;
@@ -184,6 +239,53 @@ export async function readWorkspaceManifest(
     throw new Error("Workspace manifest has an invalid shape");
   }
   return parsed;
+}
+
+export async function freezeWorkspaceRevisionSet(
+  projectDirectory: string,
+  options: FreezeWorkspaceRevisionSetOptions,
+): Promise<WorkspaceRevisionSet> {
+  const paths = workspacePaths(projectDirectory);
+  const git = await loadGitModule();
+  const repositoriesById = new Map(
+    options.manifest.repositories.map((repository) => [repository.id, repository]),
+  );
+
+  const applicationRepositories = options.scopes
+    .filter((scope) => scope.repository !== "@control")
+    .map((scope) => {
+      const repository = repositoriesById.get(scope.repository);
+      if (repository === undefined) {
+        throw new Error(
+          `Task scope references repository "${scope.repository}" missing from repository manifest`,
+        );
+      }
+
+      return {
+        id: repository.id,
+        cwd: checkoutPathFor(paths, repository),
+        access: scope.access,
+        expectedUrl: repository.git_url,
+        defaultBranch: repository.default_branch,
+        checkoutDirectory: repository.checkout_directory,
+      };
+    });
+
+  const controlScope = options.scopes.find(
+    (scope) => scope.repository === "@control",
+  );
+
+  return git.freezeRevisionSet({
+    control: {
+      id: "@control",
+      cwd: options.control.cwd ?? projectDirectory,
+      access: controlScope?.access ?? "read-write",
+      expectedUrl: options.control.expectedUrl,
+      defaultBranch: options.control.defaultBranch,
+      checkoutDirectory: options.control.checkoutDirectory ?? ".",
+    },
+    repositories: applicationRepositories,
+  });
 }
 
 async function bootstrapRepository(

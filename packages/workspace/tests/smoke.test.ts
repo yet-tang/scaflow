@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   WORKSPACE_MANIFEST_FILE,
   bootstrapWorkspace,
+  freezeWorkspaceRevisionSet,
   getWorkspaceStatus,
   packageName,
   readWorkspaceManifest,
@@ -161,24 +162,113 @@ describe("@scaflow/workspace", () => {
       }),
     ]);
   }, GIT_TEST_TIMEOUT_MS);
+
+  it("freezes @control and scoped application repository revisions without following remote movement", async () => {
+    const fixture = await createProjectFixture();
+    const control = await createRemoteFixture(fixture.rootDir, "control");
+    await rm(fixture.projectDir, { force: true, recursive: true });
+    await git(fixture.rootDir, "clone", control.remoteDir, fixture.projectDir);
+    await bootstrapWorkspace(fixture.projectDir, fixture.manifest);
+
+    const revisionSet = await freezeWorkspaceRevisionSet(fixture.projectDir, {
+      control: {
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+      },
+      manifest: fixture.manifest,
+      scopes: [
+        { repository: "@control", access: "read-write" },
+        { repository: "web", access: "read-only" },
+      ],
+    });
+    const frozenWebCommit = revisionSet.repositories[0]?.base_commit;
+
+    await writeFile(join(fixture.webSourceDir, "after-freeze.txt"), "moved\n");
+    await git(fixture.webSourceDir, "add", "after-freeze.txt");
+    await git(fixture.webSourceDir, "commit", "-m", "Move remote branch");
+    await git(fixture.webSourceDir, "push", "origin", "HEAD:main");
+    await bootstrapWorkspace(fixture.projectDir, fixture.manifest);
+
+    expect(revisionSet).toEqual({
+      version: 1,
+      control: expect.objectContaining({
+        id: "@control",
+        base_commit: expect.stringMatching(/^[0-9a-f]{40}$/),
+        access: "read-write",
+        checkout_directory: ".",
+        default_branch: "main",
+        identity: {
+          remote: "origin",
+          expected_url: control.remoteDir,
+          actual_url: control.remoteDir,
+        },
+      }),
+      repositories: [
+        expect.objectContaining({
+          id: "web",
+          base_commit: expect.stringMatching(/^[0-9a-f]{40}$/),
+          access: "read-only",
+          checkout_directory: "web",
+          default_branch: "main",
+          identity: {
+            remote: "origin",
+            expected_url: fixture.remoteDir,
+            actual_url: fixture.remoteDir,
+          },
+        }),
+      ],
+    });
+    expect(frozenWebCommit).not.toBe(
+      (
+        await git(
+          join(fixture.projectDir, "workspace", "repos", "web"),
+          "rev-parse",
+          "origin/main",
+        )
+      ).trim(),
+    );
+    expect(revisionSet.repositories[0]?.base_commit).toBe(frozenWebCommit);
+  }, GIT_TEST_TIMEOUT_MS);
+
+  it("fails when a task scope references a repository missing from the manifest", async () => {
+    const fixture = await createProjectFixture();
+
+    await expect(
+      freezeWorkspaceRevisionSet(fixture.projectDir, {
+        control: {
+          expectedUrl: fixture.remoteDir,
+          defaultBranch: "main",
+        },
+        manifest: fixture.manifest,
+        scopes: [
+          { repository: "@control", access: "read-write" },
+          { repository: "api", access: "read-only" },
+        ],
+      }),
+    ).rejects.toThrow(
+      'Task scope references repository "api" missing from repository manifest',
+    );
+  }, GIT_TEST_TIMEOUT_MS);
 });
 
 async function createProjectFixture(): Promise<{
   rootDir: string;
   projectDir: string;
   remoteDir: string;
+  webSourceDir: string;
   manifest: RepositoryManifestLike;
 }> {
   const rootDir = await mkdtemp(join(tmpdir(), "scaflow-workspace-test-"));
   tempDirs.push(rootDir);
   const projectDir = join(rootDir, "project");
   await mkdir(projectDir);
-  const { remoteDir } = await createRemoteFixture(rootDir, "web");
+  const { remoteDir, sourceDir } = await createRemoteFixture(rootDir, "web");
 
   return {
     rootDir,
     projectDir,
     remoteDir,
+    webSourceDir: sourceDir,
     manifest: {
       repositories: [
         {
@@ -197,7 +287,7 @@ async function createProjectFixture(): Promise<{
 async function createRemoteFixture(
   rootDir: string,
   name: string,
-): Promise<{ readonly remoteDir: string }> {
+): Promise<{ readonly remoteDir: string; readonly sourceDir: string }> {
   const sourceDir = join(rootDir, `${name}-source`);
   const remoteDir = join(rootDir, `${name}.git`);
 
@@ -212,7 +302,7 @@ async function createRemoteFixture(
   await git(sourceDir, "remote", "add", "origin", remoteDir);
   await git(sourceDir, "push", "origin", "HEAD:main");
 
-  return { remoteDir };
+  return { remoteDir, sourceDir };
 }
 
 async function git(cwd: string, ...args: string[]): Promise<string> {

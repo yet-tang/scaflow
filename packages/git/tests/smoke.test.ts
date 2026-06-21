@@ -11,6 +11,8 @@ import {
   checkRepositoryIdentity,
   cloneRepository,
   fetchRepository,
+  freezeRepositoryRevision,
+  freezeRevisionSet,
   getHeadCommit,
   getRemoteUrl,
   getRepositoryStatus,
@@ -20,6 +22,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+const GIT_TEST_TIMEOUT_MS = 15_000;
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -182,6 +185,107 @@ describe("@scaflow/git", () => {
     expect(JSON.stringify(redacted)).not.toContain("secret-token");
     expect(JSON.stringify(redacted)).toContain("[REDACTED]");
   });
+
+  it("freezes concrete commits, access modes, and identity evidence without following remote movement", async () => {
+    const control = await createRepositoryFixture();
+    const application = await createRepositoryFixture();
+
+    await cloneRepository({
+      cwd: control.parentDir,
+      sourceUrl: control.remoteDir,
+      targetDir: control.cloneDir,
+    });
+    await cloneRepository({
+      cwd: application.parentDir,
+      sourceUrl: application.remoteDir,
+      targetDir: application.cloneDir,
+    });
+
+    const revisionSet = await freezeRevisionSet({
+      control: {
+        id: "@control",
+        cwd: control.cloneDir,
+        access: "read-write",
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+        checkoutDirectory: ".",
+      },
+      repositories: [
+        {
+          id: "web",
+          cwd: application.cloneDir,
+          access: "read-only",
+          expectedUrl: application.remoteDir,
+          defaultBranch: "main",
+          checkoutDirectory: "web",
+        },
+      ],
+    });
+    const frozenApplicationCommit = revisionSet.repositories[0]?.base_commit;
+
+    await writeFile(join(application.sourceDir, "after-freeze.txt"), "moved\n");
+    await git(application.sourceDir, "add", "after-freeze.txt");
+    await git(application.sourceDir, "commit", "-m", "Move remote branch");
+    await git(application.sourceDir, "push", "origin", "HEAD:main");
+    await fetchRepository({ cwd: application.cloneDir });
+
+    expect(revisionSet).toEqual({
+      version: 1,
+      control: expect.objectContaining({
+        id: "@control",
+        base_commit: expect.stringMatching(/^[0-9a-f]{40}$/),
+        access: "read-write",
+        checkout_directory: ".",
+        default_branch: "main",
+        identity: {
+          remote: "origin",
+          expected_url: control.remoteDir,
+          actual_url: control.remoteDir,
+        },
+      }),
+      repositories: [
+        expect.objectContaining({
+          id: "web",
+          base_commit: expect.stringMatching(/^[0-9a-f]{40}$/),
+          access: "read-only",
+          checkout_directory: "web",
+          default_branch: "main",
+          identity: {
+            remote: "origin",
+            expected_url: application.remoteDir,
+            actual_url: application.remoteDir,
+          },
+        }),
+      ],
+    });
+    expect(frozenApplicationCommit).not.toBe(
+      (await git(application.cloneDir, "rev-parse", "origin/main")).trim(),
+    );
+    expect(revisionSet.repositories[0]?.base_commit).toBe(frozenApplicationCommit);
+  }, GIT_TEST_TIMEOUT_MS);
+
+  it("fails closed when repository identity does not match before recording a revision", async () => {
+    const fixture = await createRepositoryFixture();
+
+    await cloneRepository({
+      cwd: fixture.parentDir,
+      sourceUrl: fixture.remoteDir,
+      targetDir: fixture.cloneDir,
+    });
+
+    await expect(
+      freezeRepositoryRevision({
+        id: "web",
+        cwd: fixture.cloneDir,
+        access: "read-write",
+        expectedUrl: `${fixture.remoteDir}-wrong`,
+        defaultBranch: "main",
+        checkoutDirectory: "web",
+      }),
+    ).rejects.toMatchObject({
+      code: "GIT_REMOTE_MISMATCH",
+    });
+  }, GIT_TEST_TIMEOUT_MS);
 });
 
 async function createRepositoryFixture(): Promise<{

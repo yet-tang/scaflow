@@ -10,6 +10,7 @@ import {
   projectConfigSchema,
   repositoryCommandSchema,
   repositoryManifestSchema,
+  revisionSetSchema,
   safeParseSchema,
   taskContractSchema,
   taskDefinitionStateSchema,
@@ -18,6 +19,7 @@ import {
   type Infer,
   type ProjectConfig,
   type RepositoryManifest,
+  type RevisionSet,
 } from "../src/index";
 
 const projectFixtureUrl = new URL(
@@ -506,6 +508,155 @@ describe("@scaflow/schemas", () => {
       },
     ]) {
       expect(repositoryCommandSchema.safeParse(command).success).toBe(false);
+    }
+  });
+
+  it("validates a strict Revision Set with fixed commits and access modes", () => {
+    const revisionSet: RevisionSet = {
+      version: 1,
+      control: {
+        id: "@control",
+        base_commit: "a".repeat(40),
+        access: "read-write",
+        default_branch: "main",
+        checkout_directory: ".",
+        identity: {
+          remote: "origin",
+          expected_url: "git@example.invalid:project/control.git",
+          actual_url: "git@example.invalid:project/control.git",
+        },
+      },
+      repositories: [
+        {
+          id: "web",
+          base_commit: "b".repeat(40),
+          access: "read-only",
+          default_branch: "main",
+          checkout_directory: "web",
+          identity: {
+            remote: "origin",
+            expected_url: "git@example.invalid:project/web.git",
+            actual_url: "git@example.invalid:project/web.git",
+          },
+        },
+      ],
+    };
+
+    expect(parseSchema(revisionSetSchema, revisionSet)).toEqual(revisionSet);
+  });
+
+  it("rejects malformed Revision Set commits and reserved application repository IDs", () => {
+    const result = safeParseSchema(revisionSetSchema, {
+      version: 1,
+      control: {
+        id: "@control",
+        base_commit: "main",
+        access: "read-write",
+        default_branch: "main",
+        checkout_directory: ".",
+        identity: {
+          remote: "origin",
+          expected_url: "git@example.invalid:project/control.git",
+          actual_url: "git@example.invalid:project/control.git",
+        },
+      },
+      repositories: [
+        {
+          id: "@control",
+          base_commit: "b".repeat(40),
+          access: "read-only",
+          default_branch: "main",
+          checkout_directory: "web",
+          identity: {
+            remote: "origin",
+            expected_url: "git@example.invalid:project/web.git",
+            actual_url: "git@example.invalid:project/web.git",
+          },
+        },
+        {
+          id: "@control",
+          base_commit: "c".repeat(40),
+          access: "read-write",
+          default_branch: "main",
+          checkout_directory: "api",
+          identity: {
+            remote: "origin",
+            expected_url: "git@example.invalid:project/api.git",
+            actual_url: "git@example.invalid:project/api.git",
+          },
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ["control", "base_commit"],
+          }),
+          expect.objectContaining({
+            path: ["repositories", 0, "id"],
+          }),
+          expect.objectContaining({
+            path: ["repositories", 1, "id"],
+          }),
+        ]),
+      );
+    }
+  });
+
+  it("rejects duplicate Revision Set application repositories", () => {
+    const result = safeParseSchema(revisionSetSchema, {
+      version: 1,
+      control: {
+        id: "@control",
+        base_commit: "a".repeat(40),
+        access: "read-write",
+        default_branch: "main",
+        checkout_directory: ".",
+        identity: {
+          remote: "origin",
+          expected_url: "git@example.invalid:project/control.git",
+          actual_url: "git@example.invalid:project/control.git",
+        },
+      },
+      repositories: [
+        {
+          id: "web",
+          base_commit: "b".repeat(40),
+          access: "read-only",
+          default_branch: "main",
+          checkout_directory: "web",
+          identity: {
+            remote: "origin",
+            expected_url: "git@example.invalid:project/web.git",
+            actual_url: "git@example.invalid:project/web.git",
+          },
+        },
+        {
+          id: "web",
+          base_commit: "c".repeat(40),
+          access: "read-write",
+          default_branch: "main",
+          checkout_directory: "web-admin",
+          identity: {
+            remote: "origin",
+            expected_url: "git@example.invalid:project/web-admin.git",
+            actual_url: "git@example.invalid:project/web-admin.git",
+          },
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual([
+        expect.objectContaining({
+          code: "custom",
+          path: ["repositories", 1, "id"],
+        }),
+      ]);
     }
   });
 
