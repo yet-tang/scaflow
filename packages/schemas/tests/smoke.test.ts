@@ -11,6 +11,7 @@ import {
   repositoryCommandSchema,
   repositoryManifestSchema,
   safeParseSchema,
+  taskContractSchema,
   taskDefinitionStateSchema,
   taskRunStateSchema,
   z,
@@ -507,6 +508,178 @@ describe("@scaflow/schemas", () => {
       expect(repositoryCommandSchema.safeParse(command).success).toBe(false);
     }
   });
+
+  it("validates a strict Task Contract v1 and its public type", () => {
+    const contract = validTaskContract();
+
+    expect(parseSchema(taskContractSchema, contract)).toEqual(contract);
+  });
+
+  it("rejects read-write Task Contract scopes with empty allowed paths", () => {
+    const result = safeParseSchema(taskContractSchema, {
+      ...validTaskContract(),
+      repositories: {
+        primary: "@control",
+        scopes: [
+          {
+            repository: "@control",
+            access: "read-write",
+            allowed_paths: [],
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual([
+        expect.objectContaining({
+          code: "custom",
+          path: ["repositories", "scopes", 0, "allowed_paths"],
+        }),
+      ]);
+    }
+  });
+
+  it("allows read-only Task Contract scopes without write paths", () => {
+    const result = safeParseSchema(taskContractSchema, {
+      ...validTaskContract(),
+      repositories: {
+        primary: "api",
+        scopes: [
+          {
+            repository: "api",
+            access: "read-only",
+            allowed_paths: [],
+          },
+        ],
+      },
+      verification: {
+        commands: [
+          {
+            repository: "api",
+            executable: "pnpm",
+            args: ["test"],
+            timeout_seconds: 300,
+            required: true,
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects undeclared and reserved-looking Task Contract repository references", () => {
+    const result = safeParseSchema(taskContractSchema, {
+      ...validTaskContract(),
+      repositories: {
+        primary: "@control",
+        scopes: [
+          {
+            repository: "@control",
+            access: "read-write",
+            allowed_paths: ["packages/schemas/**"],
+          },
+          {
+            repository: "@shadow",
+            access: "read-only",
+          },
+        ],
+      },
+      verification: {
+        commands: [
+          {
+            repository: "api",
+            executable: "pnpm",
+            args: ["test"],
+            timeout_seconds: 300,
+            required: true,
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "custom",
+            path: ["repositories", "scopes", 1, "repository"],
+          }),
+          expect.objectContaining({
+            code: "custom",
+            path: ["verification", "commands", 0, "repository"],
+          }),
+        ]),
+      );
+    }
+  });
+
+  it("rejects Task Contract primary repositories not declared in scopes", () => {
+    const result = safeParseSchema(taskContractSchema, {
+      ...validTaskContract(),
+      repositories: {
+        primary: "api",
+        scopes: [
+          {
+            repository: "@control",
+            access: "read-write",
+            allowed_paths: ["packages/schemas/**"],
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual([
+        expect.objectContaining({
+          code: "custom",
+          path: ["repositories", "primary"],
+        }),
+      ]);
+    }
+  });
+
+  it("rejects unknown Task Contract fields and shell-string commands", () => {
+    const result = safeParseSchema(taskContractSchema, {
+      ...validTaskContract(),
+      task: {
+        id: "SFL-999",
+        title: "Task Contract",
+        type: "schema",
+        risk_level: "R2",
+        definition_state: "ready",
+        owner: "platform",
+      },
+      verification: {
+        commands: ["pnpm test"],
+      },
+      metadata: {},
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            path: ["task"],
+          }),
+          expect.objectContaining({
+            code: "invalid_type",
+            path: ["verification", "commands", 0],
+          }),
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            path: [],
+          }),
+        ]),
+      );
+    }
+  });
 });
 
 function validRepository(
@@ -520,5 +693,68 @@ function validRepository(
     checkout_directory: "apps/api",
     type: "service",
     ...overrides,
+  };
+}
+
+function validTaskContract(): Record<string, unknown> {
+  return {
+    version: 1,
+    task: {
+      id: "SFL-999",
+      title: "Task Contract",
+      type: "schema",
+      risk_level: "R2",
+      definition_state: "ready",
+    },
+    objective: {
+      summary: "Implement Task Contract schema.",
+    },
+    source_requirements: [
+      {
+        id: "FR-005",
+        document: "docs/source/scaflow-v0.1.0-prd.md",
+      },
+    ],
+    source_references: [
+      {
+        document: "docs/exec-plans/scaflow-v0.1.0.md",
+        section: "Task Contract Schema v1",
+      },
+    ],
+    dependencies: ["SFL-003"],
+    dependency_changes: "forbidden",
+    repositories: {
+      primary: "@control",
+      scopes: [
+        {
+          repository: "@control",
+          access: "read-write",
+          allowed_paths: ["packages/schemas/**"],
+          forbidden_paths: ["workspace/**", ".scaflow/**"],
+        },
+      ],
+    },
+    acceptance_criteria: [
+      {
+        id: "SFL-999-AC-01",
+        description: "Task Contract schema validates contract fields.",
+      },
+    ],
+    verification: {
+      commands: [
+        {
+          repository: "@control",
+          executable: "pnpm",
+          args: ["--filter", "@scaflow/schemas", "test"],
+          timeout_seconds: 300,
+          required: true,
+        },
+      ],
+    },
+    retry_policy: {
+      max_attempts: 2,
+      max_repair_rounds_per_attempt: 3,
+      escalate_after_same_failure: 2,
+    },
   };
 }

@@ -32,5 +32,13 @@ export {
   type RepositoryManifest,
   type RepositoryManifestEntry,
 } from "./repository-manifest.js";
+export {
+  taskContractRepositoryScopeSchema,
+  taskContractSchema,
+  taskContractVerificationCommandSchema,
+  type TaskContract,
+  type TaskContractRepositoryScope,
+  type TaskContractVerificationCommand,
+} from "./task-contract.js";
 export { z } from "zod";
 export type { ZodType, infer as Infer } from "zod";

@@ -128,6 +128,18 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         registerWorkspaceSync(group, cwd, io);
         continue;
       }
+      if (name === "task" && child === "list") {
+        registerTaskList(group, cwd, io, options.createCorrelationId);
+        continue;
+      }
+      if (name === "task" && child === "show") {
+        registerTaskShow(group, cwd, io, options.createCorrelationId);
+        continue;
+      }
+      if (name === "task" && child === "validate") {
+        registerTaskValidate(group, cwd, io, options.createCorrelationId);
+        continue;
+      }
       registerStub(group, child, options.createCorrelationId);
     }
   }
@@ -487,6 +499,94 @@ function registerWorkspaceSync(parent: Command, cwd: string, io: CliIo): void {
       }
 
       io.stdout.write(renderWorkspaceOperationHuman("Scaflow Workspace Sync", result));
+    });
+}
+
+function registerTaskList(
+  parent: Command,
+  cwd: string,
+  io: CliIo,
+  createCorrelationId?: () => string,
+): void {
+  parent
+    .command("list")
+    .description("list Task Contracts")
+    .action(async () => {
+      const correlationId = createCorrelationId?.();
+      const config = await loadConfigModule();
+      const contracts = await config.listTaskContracts(
+        cwd,
+        correlationId === undefined ? {} : { correlationId },
+      );
+      const tasks = contracts.map(taskSummary).sort((left, right) =>
+        left.id.localeCompare(right.id),
+      );
+
+      if (parent.parent?.opts().json === true) {
+        io.stdout.write(`${JSON.stringify({ tasks })}\n`);
+        return;
+      }
+
+      io.stdout.write(renderTaskListHuman(tasks));
+    });
+}
+
+function registerTaskShow(
+  parent: Command,
+  cwd: string,
+  io: CliIo,
+  createCorrelationId?: () => string,
+): void {
+  parent
+    .command("show")
+    .description("show a Task Contract")
+    .argument("<task-id>", "Task ID")
+    .action(async (taskId: string) => {
+      const correlationId = createCorrelationId?.();
+      const config = await loadConfigModule();
+      const contract = await config.loadTaskContract(
+        cwd,
+        taskId,
+        correlationId === undefined ? {} : { correlationId },
+      );
+
+      if (parent.parent?.opts().json === true) {
+        io.stdout.write(`${JSON.stringify({ task: contract })}\n`);
+        return;
+      }
+
+      io.stdout.write(renderTaskShowHuman(contract));
+    });
+}
+
+function registerTaskValidate(
+  parent: Command,
+  cwd: string,
+  io: CliIo,
+  createCorrelationId?: () => string,
+): void {
+  parent
+    .command("validate")
+    .description("validate a Task Contract")
+    .argument("<task-id>", "Task ID")
+    .action(async (taskId: string) => {
+      const correlationId = createCorrelationId?.();
+      const config = await loadConfigModule();
+      const contract = await config.loadTaskContract(
+        cwd,
+        taskId,
+        correlationId === undefined ? {} : { correlationId },
+      );
+      const summary = taskSummary(contract);
+
+      if (parent.parent?.opts().json === true) {
+        io.stdout.write(
+          `${JSON.stringify({ valid: true, task: { id: summary.id } })}\n`,
+        );
+        return;
+      }
+
+      io.stdout.write(`Task Contract ${summary.id} is valid\n`);
     });
 }
 
@@ -891,6 +991,55 @@ function renderRepositoryStatusHuman(
   ].join("\n");
 }
 
+interface TaskSummary {
+  readonly id: string;
+  readonly title: string;
+  readonly type: string;
+  readonly definition_state: string;
+}
+
+function taskSummary(contract: unknown): TaskSummary {
+  if (
+    typeof contract !== "object" ||
+    contract === null ||
+    !("task" in contract) ||
+    typeof contract.task !== "object" ||
+    contract.task === null
+  ) {
+    throw new TypeError("Validated Task Contract is missing task metadata");
+  }
+
+  const task = contract.task as Record<string, unknown>;
+  return {
+    id: readRequiredString(task, "id"),
+    title: readRequiredString(task, "title"),
+    type: readRequiredString(task, "type"),
+    definition_state: readRequiredString(task, "definition_state"),
+  };
+}
+
+function renderTaskListHuman(tasks: readonly TaskSummary[]): string {
+  return [
+    "Scaflow Tasks",
+    ...tasks.map(
+      (task) =>
+        `${task.id} [${task.definition_state}] ${task.title} (${task.type})`,
+    ),
+    "",
+  ].join("\n");
+}
+
+function renderTaskShowHuman(contract: unknown): string {
+  const summary = taskSummary(contract);
+  return [
+    `Task ${summary.id}`,
+    `Title: ${summary.title}`,
+    `Type: ${summary.type}`,
+    `Definition State: ${summary.definition_state}`,
+    "",
+  ].join("\n");
+}
+
 function readProjectConfig(result: unknown): unknown {
   if (
     typeof result === "object" &&
@@ -911,6 +1060,17 @@ function readRepositoryManifest(result: unknown): unknown {
     return result.repositoryManifest;
   }
   return undefined;
+}
+
+function readRequiredString(
+  record: Record<string, unknown>,
+  key: string,
+): string {
+  const value = record[key];
+  if (typeof value !== "string") {
+    throw new TypeError(`Expected Task Contract field task.${key} to be a string`);
+  }
+  return value;
 }
 
 function readEngineVersion(projectConfig: unknown): string | undefined {
@@ -997,6 +1157,15 @@ interface ConfigModule {
     directory: string,
     options: { readonly correlationId?: string },
   ) => Promise<unknown>;
+  readonly loadTaskContract: (
+    directory: string,
+    taskId: string,
+    options: { readonly correlationId?: string },
+  ) => Promise<unknown>;
+  readonly listTaskContracts: (
+    directory: string,
+    options: { readonly correlationId?: string },
+  ) => Promise<unknown[]>;
 }
 
 interface BootstrapWorkspaceResult {

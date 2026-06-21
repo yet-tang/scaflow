@@ -101,6 +101,21 @@ describe("@scaflow/cli", () => {
     );
   });
 
+  it("keeps later task lifecycle commands as stubs", async () => {
+    const output = createOutput();
+
+    const exitCode = await runCli({
+      argv: ["task", "prepare", "SFL-999"],
+      io: output.io,
+      createCorrelationId: () => "task-prepare-stub",
+    });
+
+    expect(exitCode).toBe(1);
+    expect(output.stderr()).toContain(
+      'Command "task prepare" is not implemented in Scaflow v0.1.0 yet',
+    );
+  });
+
   it.each([
     ["before", ["--json", "changeset", "show"]],
     ["after", ["changeset", "show", "--json"]],
@@ -326,6 +341,140 @@ describe("@scaflow/cli", () => {
             }),
           ],
         },
+      },
+    });
+  });
+
+  it("lists Task Contracts from tasks/<task-id>/contract.yaml", async () => {
+    const directory = await temporaryDirectory("scaflow-cli-task-list-");
+    await writeTaskContract(
+      directory,
+      "SFL-100",
+      validTaskContractYaml("SFL-100"),
+    );
+    await writeTaskContract(
+      directory,
+      "SFL-001",
+      validTaskContractYaml("SFL-001"),
+    );
+    const output = createOutput();
+
+    const exitCode = await runCli({
+      argv: ["--json", "task", "list"],
+      cwd: directory,
+      io: output.io,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(output.stderr()).toBe("");
+    expect(JSON.parse(output.stdout())).toMatchObject({
+      tasks: [
+        {
+          id: "SFL-001",
+          title: "Task Contract",
+          type: "schema",
+          definition_state: "ready",
+        },
+        {
+          id: "SFL-100",
+          title: "Task Contract",
+          type: "schema",
+          definition_state: "ready",
+        },
+      ],
+    });
+  });
+
+  it("shows and validates a Task Contract", async () => {
+    const directory = await temporaryDirectory("scaflow-cli-task-show-");
+    await writeTaskContract(
+      directory,
+      "SFL-999",
+      validTaskContractYaml().replace(
+        `args:
+        - --filter
+        - "@scaflow/schemas"
+        - test
+        - HEAD:main`,
+        `args: ["--filter", "@scaflow/schemas", "test", "HEAD:main"]`,
+      ),
+    );
+
+    const showOutput = createOutput();
+    const showExitCode = await runCli({
+      argv: ["task", "show", "SFL-999"],
+      cwd: directory,
+      io: showOutput.io,
+    });
+
+    expect(showExitCode).toBe(0);
+    expect(showOutput.stderr()).toBe("");
+    expect(showOutput.stdout()).toContain("Task SFL-999");
+    expect(showOutput.stdout()).toContain("Definition State: ready");
+
+    const validateOutput = createOutput();
+    const validateExitCode = await runCli({
+      argv: ["--json", "task", "validate", "SFL-999"],
+      cwd: directory,
+      io: validateOutput.io,
+    });
+
+    expect(validateExitCode).toBe(0);
+    expect(validateOutput.stderr()).toBe("");
+    expect(JSON.parse(validateOutput.stdout())).toEqual({
+      valid: true,
+      task: { id: "SFL-999" },
+    });
+  });
+
+  it("returns structured task errors for missing and invalid contracts", async () => {
+    const directory = await temporaryDirectory("scaflow-cli-task-invalid-");
+    await writeTaskContract(
+      directory,
+      "SFL-999",
+      validTaskContractYaml().replace(
+        "allowed_paths:\n        - packages/schemas/**",
+        "allowed_paths: []",
+      ),
+    );
+
+    const invalidOutput = createOutput();
+    const invalidExitCode = await runCli({
+      argv: ["--json", "task", "validate", "SFL-999"],
+      cwd: directory,
+      io: invalidOutput.io,
+      createCorrelationId: () => "task-invalid",
+    });
+
+    expect(invalidExitCode).toBe(1);
+    expect(invalidOutput.stdout()).toBe("");
+    expect(JSON.parse(invalidOutput.stderr())).toMatchObject({
+      error: {
+        code: "SCHEMA_PARSE_FAILED",
+        correlationId: "task-invalid",
+        details: {
+          issues: [
+            expect.objectContaining({
+              path: ["repositories", "scopes", 0, "allowed_paths"],
+            }),
+          ],
+        },
+      },
+    });
+
+    const missingOutput = createOutput();
+    const missingExitCode = await runCli({
+      argv: ["--json", "task", "show", "SFL-404"],
+      cwd: directory,
+      io: missingOutput.io,
+      createCorrelationId: () => "task-missing",
+    });
+
+    expect(missingExitCode).toBe(1);
+    expect(JSON.parse(missingOutput.stderr())).toMatchObject({
+      error: {
+        code: "TASK_CONTRACT_NOT_FOUND",
+        correlationId: "task-missing",
       },
     });
   });
@@ -682,6 +831,63 @@ async function createCliProjectWithRemote(prefix: string): Promise<{
   await git(projectDir, "init");
 
   return { rootDir, projectDir, remoteDir };
+}
+
+async function writeTaskContract(
+  directory: string,
+  taskId: string,
+  contents: string,
+): Promise<void> {
+  const taskDirectory = join(directory, "tasks", taskId);
+  await mkdir(taskDirectory, { recursive: true });
+  await writeFile(join(taskDirectory, "contract.yaml"), contents);
+}
+
+function validTaskContractYaml(taskId = "SFL-999"): string {
+  return `version: 1
+task:
+  id: ${taskId}
+  title: Task Contract
+  type: schema
+  risk_level: R2
+  definition_state: ready
+objective:
+  summary: Implement Task Contract schema.
+source_requirements:
+  - id: FR-005
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-003
+dependency_changes: forbidden
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - packages/schemas/**
+      forbidden_paths:
+        - workspace/**
+        - .scaflow/**
+acceptance_criteria:
+  - id: ${taskId}-AC-01
+    description: Task Contract schema validates contract fields.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args:
+        - --filter
+        - "@scaflow/schemas"
+        - test
+        - HEAD:main
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2
+`;
 }
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
