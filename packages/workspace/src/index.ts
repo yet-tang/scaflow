@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { dirname, join, normalize, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -6,6 +6,7 @@ export const packageName = "@scaflow/workspace";
 
 export const WORKSPACE_DIR = "workspace";
 export const WORKSPACE_REPOS_DIR = "workspace/repos";
+export const WORKSPACE_RUNS_DIR = "workspace/runs";
 export const WORKSPACE_MANIFEST_FILE = "workspace/manifest.json";
 
 export type WorkspaceRepositoryState =
@@ -34,6 +35,16 @@ export interface TaskRepositoryScopeLike {
   readonly access: RepositoryAccessMode;
 }
 
+export interface TaskContractLike {
+  readonly task: {
+    readonly id: string;
+    readonly definition_state: string;
+  };
+  readonly repositories: {
+    readonly scopes: readonly TaskRepositoryScopeLike[];
+  };
+}
+
 export interface FreezeWorkspaceRevisionSetOptions {
   readonly control: {
     readonly cwd?: string;
@@ -43,6 +54,41 @@ export interface FreezeWorkspaceRevisionSetOptions {
   };
   readonly manifest: RepositoryManifestLike;
   readonly scopes: readonly TaskRepositoryScopeLike[];
+}
+
+export interface PrepareTaskRunWorkspaceOptions {
+  readonly taskContract: TaskContractLike;
+  readonly taskRunId: string;
+  readonly manifest: RepositoryManifestLike;
+  readonly control: {
+    readonly cwd?: string;
+    readonly expectedUrl: string;
+    readonly defaultBranch: string;
+    readonly checkoutDirectory?: string;
+  };
+}
+
+export interface PreparedTaskRunRepository {
+  readonly id: string;
+  readonly access: RepositoryAccessMode;
+  readonly sourcePath: string;
+  readonly worktreePath: string;
+  readonly baseCommit: string;
+  readonly branchName?: string;
+  readonly mode: "detached" | "branch";
+  readonly reused: boolean;
+}
+
+export interface PrepareTaskRunWorkspaceResult {
+  readonly taskId: string;
+  readonly taskRunId: string;
+  readonly bundleRoot: string;
+  readonly runtimeDirectory: string;
+  readonly repositoriesDirectory: string;
+  readonly revisionSetPath: string;
+  readonly metadataPath: string;
+  readonly revisionSet: WorkspaceRevisionSet;
+  readonly repositories: readonly PreparedTaskRunRepository[];
 }
 
 export interface WorkspaceRepositoryResult {
@@ -128,6 +174,17 @@ export interface SerializedWorkspaceError {
 }
 
 interface GitModule {
+  readonly addBranchWorktree: (options: {
+    readonly sourceCwd: string;
+    readonly targetDir: string;
+    readonly branchName: string;
+    readonly commit: string;
+  }) => Promise<void>;
+  readonly addDetachedWorktree: (options: {
+    readonly sourceCwd: string;
+    readonly targetDir: string;
+    readonly commit: string;
+  }) => Promise<void>;
   readonly checkRepositoryIdentity: (options: {
     readonly cwd: string;
     readonly expectedUrl: string;
@@ -162,6 +219,12 @@ interface GitModule {
     }[];
   }) => Promise<WorkspaceRevisionSet>;
   readonly getHeadCommit: (options: { readonly cwd: string }) => Promise<string>;
+  readonly getRepositoryRoot: (options: {
+    readonly cwd: string;
+  }) => Promise<string>;
+  readonly getCurrentBranch: (options: {
+    readonly cwd: string;
+  }) => Promise<string | null>;
   readonly getRepositoryStatus: (options: {
     readonly cwd: string;
   }) => Promise<{ readonly clean: boolean; readonly porcelain: string }>;
@@ -279,13 +342,82 @@ export async function freezeWorkspaceRevisionSet(
     control: {
       id: "@control",
       cwd: options.control.cwd ?? projectDirectory,
-      access: controlScope?.access ?? "read-write",
+      access: controlScope?.access ?? "read-only",
       expectedUrl: options.control.expectedUrl,
       defaultBranch: options.control.defaultBranch,
       checkoutDirectory: options.control.checkoutDirectory ?? ".",
     },
     repositories: applicationRepositories,
   });
+}
+
+export async function prepareTaskRunWorkspace(
+  projectDirectory: string,
+  options: PrepareTaskRunWorkspaceOptions,
+): Promise<PrepareTaskRunWorkspaceResult> {
+  const taskId = normalizeTaskRunSegment(options.taskContract.task.id, "Task ID");
+  const taskRunId = normalizeTaskRunSegment(options.taskRunId, "TaskRun ID");
+  if (options.taskContract.task.definition_state !== "ready") {
+    throw new Error(`Task ${taskId} is not ready for preparation`);
+  }
+
+  const paths = taskRunWorkspacePaths(projectDirectory, taskId, taskRunId);
+  await acquireTaskRunLock(projectDirectory, taskId, taskRunId, async () => {
+    await mkdir(paths.bundleRoot, { recursive: true });
+    await mkdir(paths.runtimeDirectory, { recursive: true });
+    await mkdir(paths.repositoriesDirectory, { recursive: true });
+
+    const revisionSet = await readOrFreezeTaskRunRevisionSet(
+      projectDirectory,
+      paths,
+      {
+        control: options.control,
+        manifest: options.manifest,
+        scopes: options.taskContract.repositories.scopes,
+      },
+    );
+    await validateExistingTaskRunMetadata(paths, taskId, taskRunId, revisionSet);
+
+    const repositories = await createTaskRunWorktrees(
+      projectDirectory,
+      paths,
+      taskId,
+      taskRunId,
+      options.manifest,
+      revisionSet,
+    );
+
+    await assertNotGitRepository(paths.bundleRoot);
+    await writeJsonFile(paths.metadataPath, {
+      version: 1,
+      taskId,
+      taskRunId,
+      bundleRoot: paths.bundleRoot,
+      runtimeDirectory: paths.runtimeDirectory,
+      repositoriesDirectory: paths.repositoriesDirectory,
+      revisionSetPath: paths.revisionSetPath,
+      repositories,
+    });
+  });
+
+  const revisionSet = JSON.parse(
+    await readFile(paths.revisionSetPath, "utf8"),
+  ) as WorkspaceRevisionSet;
+  const metadata = JSON.parse(await readFile(paths.metadataPath, "utf8")) as {
+    readonly repositories: readonly PreparedTaskRunRepository[];
+  };
+
+  return {
+    taskId,
+    taskRunId,
+    bundleRoot: paths.bundleRoot,
+    runtimeDirectory: paths.runtimeDirectory,
+    repositoriesDirectory: paths.repositoriesDirectory,
+    revisionSetPath: paths.revisionSetPath,
+    metadataPath: paths.metadataPath,
+    revisionSet,
+    repositories: metadata.repositories,
+  };
 }
 
 async function bootstrapRepository(
@@ -484,6 +616,14 @@ interface WorkspacePaths {
   readonly manifestPath: string;
 }
 
+interface TaskRunWorkspacePaths {
+  readonly bundleRoot: string;
+  readonly runtimeDirectory: string;
+  readonly repositoriesDirectory: string;
+  readonly revisionSetPath: string;
+  readonly metadataPath: string;
+}
+
 function workspacePaths(projectDirectory: string): WorkspacePaths {
   return {
     workspaceDirectory: join(projectDirectory, WORKSPACE_DIR),
@@ -492,11 +632,411 @@ function workspacePaths(projectDirectory: string): WorkspacePaths {
   };
 }
 
+function taskRunWorkspacePaths(
+  projectDirectory: string,
+  taskId: string,
+  taskRunId: string,
+): TaskRunWorkspacePaths {
+  const bundleRoot = join(projectDirectory, WORKSPACE_RUNS_DIR, taskId, taskRunId);
+  return {
+    bundleRoot,
+    runtimeDirectory: join(bundleRoot, "runtime"),
+    repositoriesDirectory: join(bundleRoot, "repositories"),
+    revisionSetPath: join(bundleRoot, "revision-set.json"),
+    metadataPath: join(bundleRoot, "task-run-workspace.json"),
+  };
+}
+
 function checkoutPathFor(
   paths: WorkspacePaths,
   repository: RepositoryManifestEntryLike,
 ): string {
   return join(paths.repositoriesDirectory, normalize(repository.checkout_directory));
+}
+
+async function createTaskRunWorktrees(
+  projectDirectory: string,
+  paths: TaskRunWorkspacePaths,
+  taskId: string,
+  taskRunId: string,
+  manifest: RepositoryManifestLike,
+  revisionSet: WorkspaceRevisionSet,
+): Promise<PreparedTaskRunRepository[]> {
+  const git = await loadGitModule();
+  const workspace = workspacePaths(projectDirectory);
+  const manifestById = new Map(
+    manifest.repositories.map((repository) => [repository.id, repository]),
+  );
+  const repositories: PreparedTaskRunRepository[] = [];
+
+  if (revisionSet.control.access === "read-write") {
+    repositories.push(
+      await prepareRepositoryWorktree(git, {
+        id: "@control",
+        access: revisionSet.control.access,
+        sourcePath: projectDirectory,
+        worktreePath: join(paths.bundleRoot, "control"),
+        baseCommit: revisionSet.control.base_commit,
+        expectedUrl: revisionSet.control.identity.expected_url,
+        taskId,
+        taskRunId,
+      }),
+    );
+  }
+
+  for (const repository of revisionSet.repositories) {
+    const manifestEntry = manifestById.get(repository.id);
+    if (manifestEntry === undefined) {
+      throw new Error(`Revision Set repository "${repository.id}" missing from manifest`);
+    }
+
+    repositories.push(
+      await prepareRepositoryWorktree(git, {
+        id: repository.id,
+        access: repository.access,
+        sourcePath: checkoutPathFor(workspace, manifestEntry),
+        worktreePath: join(paths.repositoriesDirectory, repository.id),
+        baseCommit: repository.base_commit,
+        expectedUrl: repository.identity.expected_url,
+        taskId,
+        taskRunId,
+      }),
+    );
+  }
+
+  return repositories;
+}
+
+async function readOrFreezeTaskRunRevisionSet(
+  projectDirectory: string,
+  paths: TaskRunWorkspacePaths,
+  options: FreezeWorkspaceRevisionSetOptions,
+): Promise<WorkspaceRevisionSet> {
+  if (await pathExists(paths.revisionSetPath)) {
+    return await readTaskRunRevisionSet(paths.revisionSetPath);
+  }
+
+  const revisionSet = await freezeWorkspaceRevisionSet(projectDirectory, options);
+  await writeJsonFile(paths.revisionSetPath, revisionSet);
+  return revisionSet;
+}
+
+async function readTaskRunRevisionSet(path: string): Promise<WorkspaceRevisionSet> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(path, "utf8")) as unknown;
+  } catch (error) {
+    throw new Error(`Existing TaskRun revision-set.json is invalid: ${path}`, {
+      cause: error,
+    });
+  }
+
+  if (!isWorkspaceRevisionSet(parsed)) {
+    throw new Error(`Existing TaskRun revision-set.json has an invalid shape: ${path}`);
+  }
+  return parsed;
+}
+
+async function validateExistingTaskRunMetadata(
+  paths: TaskRunWorkspacePaths,
+  taskId: string,
+  taskRunId: string,
+  revisionSet: WorkspaceRevisionSet,
+): Promise<void> {
+  if (!(await pathExists(paths.metadataPath))) {
+    return;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(paths.metadataPath, "utf8")) as unknown;
+  } catch (error) {
+    throw new Error(`Existing TaskRun workspace metadata is invalid: ${paths.metadataPath}`, {
+      cause: error,
+    });
+  }
+
+  if (!isTaskRunWorkspaceMetadata(parsed)) {
+    throw new Error(
+      `Existing TaskRun workspace metadata has an invalid shape: ${paths.metadataPath}`,
+    );
+  }
+  if (
+    parsed.taskId !== taskId ||
+    parsed.taskRunId !== taskRunId ||
+    parsed.revisionSetPath !== paths.revisionSetPath
+  ) {
+    throw new Error("Existing TaskRun workspace metadata does not match this TaskRun");
+  }
+
+  const expectedRepositories = repositoryMetadataSignaturesFromRevisionSet(
+    paths,
+    taskId,
+    taskRunId,
+    revisionSet,
+  );
+  const actualRepositories = parsed.repositories.map((repository) =>
+    repositoryMetadataSignature(repository),
+  );
+  if (JSON.stringify(actualRepositories) !== JSON.stringify(expectedRepositories)) {
+    throw new Error(
+      "Existing TaskRun workspace metadata is inconsistent with revision-set.json",
+    );
+  }
+}
+
+function repositoryMetadataSignaturesFromRevisionSet(
+  paths: TaskRunWorkspacePaths,
+  taskId: string,
+  taskRunId: string,
+  revisionSet: WorkspaceRevisionSet,
+): RepositoryMetadataSignature[] {
+  const repositories: RepositoryMetadataSignature[] = [];
+  if (revisionSet.control.access === "read-write") {
+    repositories.push(
+      repositoryMetadataSignatureFromRevision(
+        revisionSet.control,
+        join(paths.bundleRoot, "control"),
+        taskId,
+        taskRunId,
+      ),
+    );
+  }
+
+  for (const repository of revisionSet.repositories) {
+    repositories.push(
+      repositoryMetadataSignatureFromRevision(
+        repository,
+        join(paths.repositoriesDirectory, repository.id),
+        taskId,
+        taskRunId,
+      ),
+    );
+  }
+  return repositories;
+}
+
+interface RepositoryMetadataSignature {
+  readonly id: string;
+  readonly access: RepositoryAccessMode;
+  readonly worktreePath: string;
+  readonly baseCommit: string;
+  readonly branchName?: string;
+  readonly mode: "detached" | "branch";
+}
+
+function repositoryMetadataSignatureFromRevision(
+  repository: WorkspaceRevisionSetRepository,
+  worktreePath: string,
+  taskId: string,
+  taskRunId: string,
+): RepositoryMetadataSignature {
+  const mode = repository.access === "read-only" ? "detached" : "branch";
+  const branchName =
+    mode === "branch"
+      ? taskBranchName(repository.id, taskId, taskRunId)
+      : undefined;
+
+  return {
+    id: repository.id,
+    access: repository.access,
+    worktreePath,
+    baseCommit: repository.base_commit,
+    ...(branchName === undefined ? {} : { branchName }),
+    mode,
+  };
+}
+
+function repositoryMetadataSignature(
+  repository: PreparedTaskRunRepository,
+): RepositoryMetadataSignature {
+  return {
+    id: repository.id,
+    access: repository.access,
+    worktreePath: repository.worktreePath,
+    baseCommit: repository.baseCommit,
+    ...(repository.branchName === undefined
+      ? {}
+      : { branchName: repository.branchName }),
+    mode: repository.mode,
+  };
+}
+
+async function prepareRepositoryWorktree(
+  git: GitModule,
+  options: {
+    readonly id: string;
+    readonly access: RepositoryAccessMode;
+    readonly sourcePath: string;
+    readonly worktreePath: string;
+    readonly baseCommit: string;
+    readonly expectedUrl: string;
+    readonly taskId: string;
+    readonly taskRunId: string;
+  },
+): Promise<PreparedTaskRunRepository> {
+  const mode = options.access === "read-only" ? "detached" : "branch";
+  const branchName =
+    mode === "branch"
+      ? taskBranchName(options.id, options.taskId, options.taskRunId)
+      : undefined;
+
+  if (await pathExists(options.worktreePath)) {
+    await verifyExistingWorktree(git, options, mode, branchName);
+    return {
+      id: options.id,
+      access: options.access,
+      sourcePath: options.sourcePath,
+      worktreePath: options.worktreePath,
+      baseCommit: options.baseCommit,
+      ...(branchName === undefined ? {} : { branchName }),
+      mode,
+      reused: true,
+    };
+  }
+
+  await mkdir(dirname(options.worktreePath), { recursive: true });
+  if (mode === "detached") {
+    await git.addDetachedWorktree({
+      sourceCwd: options.sourcePath,
+      targetDir: options.worktreePath,
+      commit: options.baseCommit,
+    });
+  } else {
+    await git.addBranchWorktree({
+      sourceCwd: options.sourcePath,
+      targetDir: options.worktreePath,
+      branchName: requireBranchName(branchName),
+      commit: options.baseCommit,
+    });
+  }
+
+  await verifyExistingWorktree(git, options, mode, branchName);
+  return {
+    id: options.id,
+    access: options.access,
+    sourcePath: options.sourcePath,
+    worktreePath: options.worktreePath,
+    baseCommit: options.baseCommit,
+    ...(branchName === undefined ? {} : { branchName }),
+    mode,
+    reused: false,
+  };
+}
+
+async function verifyExistingWorktree(
+  git: GitModule,
+  options: {
+    readonly id: string;
+    readonly worktreePath: string;
+    readonly baseCommit: string;
+    readonly expectedUrl: string;
+  },
+  mode: "detached" | "branch",
+  branchName: string | undefined,
+): Promise<void> {
+  const repositoryRoot = await git.getRepositoryRoot({ cwd: options.worktreePath });
+  if (
+    (await realpath(repositoryRoot)) !== (await realpath(options.worktreePath))
+  ) {
+    throw new Error(
+      `Existing TaskRun path for ${options.id} is not a Git worktree root`,
+    );
+  }
+
+  const identity = await git.checkRepositoryIdentity({
+    cwd: options.worktreePath,
+    expectedUrl: options.expectedUrl,
+  });
+  if (identity.status !== "matching") {
+    throw identity.error;
+  }
+
+  const [head, currentBranch] = await Promise.all([
+    git.getHeadCommit({ cwd: options.worktreePath }),
+    git.getCurrentBranch({ cwd: options.worktreePath }),
+  ]);
+  if (head !== options.baseCommit) {
+    throw new Error(
+      `Existing TaskRun worktree for ${options.id} is at ${head}, expected ${options.baseCommit}`,
+    );
+  }
+  if (mode === "detached" && currentBranch !== null) {
+    throw new Error(`Read-only TaskRun worktree for ${options.id} is not detached`);
+  }
+  if (mode === "branch" && currentBranch !== branchName) {
+    throw new Error(
+      `Read-write TaskRun worktree for ${options.id} is on ${currentBranch ?? "detached HEAD"}, expected ${branchName}`,
+    );
+  }
+}
+
+async function acquireTaskRunLock<Result>(
+  projectDirectory: string,
+  taskId: string,
+  taskRunId: string,
+  work: () => Promise<Result>,
+): Promise<Result> {
+  const lockRoot = join(projectDirectory, ".scaflow", "locks", "task-runs");
+  const lockDirectory = join(lockRoot, `${taskId}-${taskRunId}.lock`);
+  await mkdir(lockRoot, { recursive: true });
+  try {
+    await mkdir(lockDirectory);
+  } catch (error) {
+    throw new Error(
+      `TaskRun workspace lock is already held for ${taskId}/${taskRunId}`,
+      { cause: error },
+    );
+  }
+
+  try {
+    return await work();
+  } finally {
+    await rm(lockDirectory, { force: true, recursive: true });
+  }
+}
+
+async function assertNotGitRepository(path: string): Promise<void> {
+  if (await pathExists(join(path, ".git"))) {
+    throw new Error(`TaskRun bundle root must not be a Git repository: ${path}`);
+  }
+}
+
+async function writeJsonFile(path: string, value: unknown): Promise<void> {
+  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function taskBranchName(
+  repositoryId: string,
+  taskId: string,
+  taskRunId: string,
+): string {
+  return `scaflow/${normalizeBranchSegment(taskId)}/${normalizeBranchSegment(taskRunId)}/${normalizeBranchSegment(repositoryId)}`;
+}
+
+function normalizeTaskRunSegment(value: string, label: string): string {
+  const normalized = value.trim();
+  if (
+    normalized === "" ||
+    normalized.includes("/") ||
+    normalized.includes("\\") ||
+    normalized === "." ||
+    normalized === ".."
+  ) {
+    throw new Error(`${label} must be a safe path segment`);
+  }
+  return normalized;
+}
+
+function normalizeBranchSegment(value: string): string {
+  return value.replace(/^@/, "").replace(/[^A-Za-z0-9._-]+/g, "-");
+}
+
+function requireBranchName(value: string | undefined): string {
+  if (value === undefined) {
+    throw new Error("Branch name is required for read-write worktrees");
+  }
+  return value;
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -529,6 +1069,112 @@ function isWorkspaceManifest(value: unknown): value is WorkspaceManifest {
   }
   const candidate = value as { version?: unknown; repositories?: unknown };
   return candidate.version === 1 && Array.isArray(candidate.repositories);
+}
+
+function isWorkspaceRevisionSet(value: unknown): value is WorkspaceRevisionSet {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as {
+    version?: unknown;
+    control?: unknown;
+    repositories?: unknown;
+  };
+  return (
+    candidate.version === 1 &&
+    isRevisionSetRepository(candidate.control, "@control") &&
+    Array.isArray(candidate.repositories) &&
+    candidate.repositories.every((repository) =>
+      isRevisionSetRepository(repository),
+    )
+  );
+}
+
+function isRevisionSetRepository(
+  value: unknown,
+  expectedId?: string,
+): value is WorkspaceRevisionSetRepository {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as {
+    id?: unknown;
+    base_commit?: unknown;
+    access?: unknown;
+    default_branch?: unknown;
+    checkout_directory?: unknown;
+    identity?: {
+      remote?: unknown;
+      expected_url?: unknown;
+      actual_url?: unknown;
+    };
+  };
+  return (
+    typeof candidate.id === "string" &&
+    (expectedId === undefined || candidate.id === expectedId) &&
+    typeof candidate.base_commit === "string" &&
+    (candidate.access === "read-only" || candidate.access === "read-write") &&
+    typeof candidate.default_branch === "string" &&
+    typeof candidate.checkout_directory === "string" &&
+    typeof candidate.identity === "object" &&
+    candidate.identity !== null &&
+    typeof candidate.identity.remote === "string" &&
+    typeof candidate.identity.expected_url === "string" &&
+    typeof candidate.identity.actual_url === "string"
+  );
+}
+
+function isTaskRunWorkspaceMetadata(value: unknown): value is {
+  readonly taskId: string;
+  readonly taskRunId: string;
+  readonly revisionSetPath: string;
+  readonly repositories: readonly PreparedTaskRunRepository[];
+} {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as {
+    taskId?: unknown;
+    taskRunId?: unknown;
+    revisionSetPath?: unknown;
+    repositories?: unknown;
+  };
+  return (
+    typeof candidate.taskId === "string" &&
+    typeof candidate.taskRunId === "string" &&
+    typeof candidate.revisionSetPath === "string" &&
+    Array.isArray(candidate.repositories) &&
+    candidate.repositories.every(isPreparedTaskRunRepository)
+  );
+}
+
+function isPreparedTaskRunRepository(
+  value: unknown,
+): value is PreparedTaskRunRepository {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as {
+    id?: unknown;
+    access?: unknown;
+    sourcePath?: unknown;
+    worktreePath?: unknown;
+    baseCommit?: unknown;
+    branchName?: unknown;
+    mode?: unknown;
+    reused?: unknown;
+  };
+  return (
+    typeof candidate.id === "string" &&
+    (candidate.access === "read-only" || candidate.access === "read-write") &&
+    typeof candidate.sourcePath === "string" &&
+    typeof candidate.worktreePath === "string" &&
+    typeof candidate.baseCommit === "string" &&
+    (candidate.branchName === undefined ||
+      typeof candidate.branchName === "string") &&
+    (candidate.mode === "detached" || candidate.mode === "branch") &&
+    typeof candidate.reused === "boolean"
+  );
 }
 
 async function loadGitModule(): Promise<GitModule> {

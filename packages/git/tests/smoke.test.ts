@@ -8,9 +8,12 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   GitError,
+  addBranchWorktree,
+  addDetachedWorktree,
   checkRepositoryIdentity,
   cloneRepository,
   fetchRepository,
+  getCurrentBranch,
   freezeRepositoryRevision,
   freezeRevisionSet,
   getHeadCommit,
@@ -262,6 +265,38 @@ describe("@scaflow/git", () => {
       (await git(application.cloneDir, "rev-parse", "origin/main")).trim(),
     );
     expect(revisionSet.repositories[0]?.base_commit).toBe(frozenApplicationCommit);
+  }, GIT_TEST_TIMEOUT_MS);
+
+  it("creates detached and branch worktrees at explicit commits", async () => {
+    const fixture = await createRepositoryFixture();
+
+    await cloneRepository({
+      cwd: fixture.parentDir,
+      sourceUrl: fixture.remoteDir,
+      targetDir: fixture.cloneDir,
+    });
+    const commit = await getHeadCommit({ cwd: fixture.cloneDir });
+    const detachedDir = join(fixture.parentDir, "detached-worktree");
+    const branchDir = join(fixture.parentDir, "branch-worktree");
+
+    await addDetachedWorktree({
+      sourceCwd: fixture.cloneDir,
+      targetDir: detachedDir,
+      commit,
+    });
+    await addBranchWorktree({
+      sourceCwd: fixture.cloneDir,
+      targetDir: branchDir,
+      branchName: "scaflow/SFL-017/run-001/web",
+      commit,
+    });
+
+    expect(await getHeadCommit({ cwd: detachedDir })).toBe(commit);
+    expect(await getCurrentBranch({ cwd: detachedDir })).toBeNull();
+    expect(await getHeadCommit({ cwd: branchDir })).toBe(commit);
+    expect(await getCurrentBranch({ cwd: branchDir })).toBe(
+      "scaflow/SFL-017/run-001/web",
+    );
   }, GIT_TEST_TIMEOUT_MS);
 
   it("fails closed when repository identity does not match before recording a revision", async () => {

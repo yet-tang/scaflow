@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -12,8 +12,10 @@ import {
   freezeWorkspaceRevisionSet,
   getWorkspaceStatus,
   packageName,
+  prepareTaskRunWorkspace,
   readWorkspaceManifest,
   type RepositoryManifestLike,
+  type TaskContractLike,
 } from "../src/index";
 
 const execFileAsync = promisify(execFile);
@@ -249,7 +251,414 @@ describe("@scaflow/workspace", () => {
       'Task scope references repository "api" missing from repository manifest',
     );
   }, GIT_TEST_TIMEOUT_MS);
+
+  it("prepares a TaskRun bundle with detached read-only and branch read-write worktrees outside workspace/repos", async () => {
+    const fixture = await createProjectFixture();
+    const control = await createRemoteFixture(fixture.rootDir, "control");
+    await rm(fixture.projectDir, { force: true, recursive: true });
+    await git(fixture.rootDir, "clone", control.remoteDir, fixture.projectDir);
+    await bootstrapWorkspace(fixture.projectDir, fixture.manifest);
+    const workspaceCheckout = join(fixture.projectDir, "workspace", "repos", "web");
+    await writeFile(join(workspaceCheckout, "developer-note.txt"), "local\n");
+
+    const result = await prepareTaskRunWorkspace(fixture.projectDir, {
+      taskContract: taskContract([
+        { repository: "@control", access: "read-write" },
+        { repository: "web", access: "read-only" },
+      ]),
+      taskRunId: "run-001",
+      manifest: fixture.manifest,
+      control: {
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+      },
+    });
+
+    await expect(stat(join(result.bundleRoot, ".git"))).rejects.toThrow();
+    expect(result.bundleRoot).toBe(
+      join(fixture.projectDir, "workspace", "runs", "SFL-017", "run-001"),
+    );
+    expect(result.repositories).toEqual([
+      expect.objectContaining({
+        id: "@control",
+        mode: "branch",
+        branchName: "scaflow/SFL-017/run-001/control",
+        reused: false,
+      }),
+      expect.objectContaining({
+        id: "web",
+        mode: "detached",
+        reused: false,
+      }),
+    ]);
+    expect(
+      (await git(join(result.bundleRoot, "control"), "branch", "--show-current"))
+        .trim(),
+    ).toBe("scaflow/SFL-017/run-001/control");
+    expect(
+      (await git(join(result.bundleRoot, "repositories", "web"), "branch", "--show-current"))
+        .trim(),
+    ).toBe("");
+    await expect(
+      readFile(join(workspaceCheckout, "developer-note.txt"), "utf8"),
+    ).resolves.toBe("local\n");
+    await expect(
+      readFile(join(result.bundleRoot, "revision-set.json"), "utf8"),
+    ).resolves.toContain('"id": "web"');
+
+    const repeated = await prepareTaskRunWorkspace(fixture.projectDir, {
+      taskContract: taskContract([
+        { repository: "@control", access: "read-write" },
+        { repository: "web", access: "read-only" },
+      ]),
+      taskRunId: "run-001",
+      manifest: fixture.manifest,
+      control: {
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+      },
+    });
+    expect(repeated.repositories.every((repository) => repository.reused)).toBe(true);
+  }, GIT_TEST_TIMEOUT_MS);
+
+  it("creates task branches for read-write application scopes", async () => {
+    const fixture = await createProjectFixture();
+    const control = await createRemoteFixture(fixture.rootDir, "control");
+    await rm(fixture.projectDir, { force: true, recursive: true });
+    await git(fixture.rootDir, "clone", control.remoteDir, fixture.projectDir);
+    await bootstrapWorkspace(fixture.projectDir, fixture.manifest);
+
+    const result = await prepareTaskRunWorkspace(fixture.projectDir, {
+      taskContract: taskContract([
+        { repository: "@control", access: "read-write" },
+        { repository: "web", access: "read-write" },
+      ]),
+      taskRunId: "run-branch",
+      manifest: fixture.manifest,
+      control: {
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+      },
+    });
+
+    expect(
+      (await git(
+        join(result.bundleRoot, "repositories", "web"),
+        "branch",
+        "--show-current",
+      )).trim(),
+    ).toBe("scaflow/SFL-017/run-branch/web");
+  }, GIT_TEST_TIMEOUT_MS);
+
+  it("does not create a writable control worktree unless @control is explicitly read-write", async () => {
+    const fixture = await createProjectFixture();
+    const control = await createRemoteFixture(fixture.rootDir, "control");
+    await rm(fixture.projectDir, { force: true, recursive: true });
+    await git(fixture.rootDir, "clone", control.remoteDir, fixture.projectDir);
+    await bootstrapWorkspace(fixture.projectDir, fixture.manifest);
+
+    const absentControl = await prepareTaskRunWorkspace(fixture.projectDir, {
+      taskContract: taskContract([{ repository: "web", access: "read-only" }]),
+      taskRunId: "run-without-control-scope",
+      manifest: fixture.manifest,
+      control: {
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+      },
+    });
+    expect(absentControl.revisionSet.control.access).toBe("read-only");
+    expect(absentControl.repositories.map((repository) => repository.id)).toEqual([
+      "web",
+    ]);
+    await expect(
+      stat(join(absentControl.bundleRoot, "control")),
+    ).rejects.toThrow();
+
+    const readOnlyControl = await prepareTaskRunWorkspace(fixture.projectDir, {
+      taskContract: taskContract([
+        { repository: "@control", access: "read-only" },
+        { repository: "web", access: "read-only" },
+      ]),
+      taskRunId: "run-readonly-control-scope",
+      manifest: fixture.manifest,
+      control: {
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+      },
+    });
+    expect(readOnlyControl.revisionSet.control.access).toBe("read-only");
+    expect(readOnlyControl.repositories.map((repository) => repository.id)).toEqual([
+      "web",
+    ]);
+    await expect(
+      stat(join(readOnlyControl.bundleRoot, "control")),
+    ).rejects.toThrow();
+
+    const readWriteControl = await prepareTaskRunWorkspace(fixture.projectDir, {
+      taskContract: taskContract([
+        { repository: "@control", access: "read-write" },
+        { repository: "web", access: "read-only" },
+      ]),
+      taskRunId: "run-readwrite-control-scope",
+      manifest: fixture.manifest,
+      control: {
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+      },
+    });
+    expect(readWriteControl.repositories.map((repository) => repository.id)).toEqual([
+      "@control",
+      "web",
+    ]);
+    expect(
+      (
+        await git(
+          join(readWriteControl.bundleRoot, "control"),
+          "branch",
+          "--show-current",
+        )
+      ).trim(),
+    ).toBe("scaflow/SFL-017/run-readwrite-control-scope/control");
+  }, GIT_TEST_TIMEOUT_MS);
+
+  it("reuses the stored Revision Set when base checkouts move after prepare", async () => {
+    const fixture = await createProjectFixture();
+    const control = await createRemoteFixture(fixture.rootDir, "control");
+    await rm(fixture.projectDir, { force: true, recursive: true });
+    await git(fixture.rootDir, "clone", control.remoteDir, fixture.projectDir);
+    await bootstrapWorkspace(fixture.projectDir, fixture.manifest);
+
+    const first = await prepareTaskRunWorkspace(fixture.projectDir, {
+      taskContract: taskContract([{ repository: "web", access: "read-only" }]),
+      taskRunId: "run-stored-revision",
+      manifest: fixture.manifest,
+      control: {
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+      },
+    });
+    const frozenRevisionSet = await readFile(first.revisionSetPath, "utf8");
+    const frozenWebCommit = first.revisionSet.repositories[0]?.base_commit;
+
+    await writeFile(join(fixture.webSourceDir, "after-prepare.txt"), "moved\n");
+    await git(fixture.webSourceDir, "add", "after-prepare.txt");
+    await git(fixture.webSourceDir, "commit", "-m", "Move web branch");
+    await git(fixture.webSourceDir, "push", "origin", "HEAD:main");
+    await bootstrapWorkspace(fixture.projectDir, fixture.manifest);
+
+    const repeated = await prepareTaskRunWorkspace(fixture.projectDir, {
+      taskContract: taskContract([{ repository: "web", access: "read-only" }]),
+      taskRunId: "run-stored-revision",
+      manifest: fixture.manifest,
+      control: {
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+      },
+    });
+
+    expect(await readFile(repeated.revisionSetPath, "utf8")).toBe(
+      frozenRevisionSet,
+    );
+    expect(repeated.revisionSet.repositories[0]?.base_commit).toBe(
+      frozenWebCommit,
+    );
+    expect(repeated.repositories).toEqual([
+      expect.objectContaining({ id: "web", reused: true }),
+    ]);
+  }, GIT_TEST_TIMEOUT_MS);
+
+  it("fails closed instead of overwriting invalid or inconsistent Revision Set evidence", async () => {
+    const fixture = await createProjectFixture();
+    const control = await createRemoteFixture(fixture.rootDir, "control");
+    await rm(fixture.projectDir, { force: true, recursive: true });
+    await git(fixture.rootDir, "clone", control.remoteDir, fixture.projectDir);
+    await bootstrapWorkspace(fixture.projectDir, fixture.manifest);
+
+    const invalid = await prepareTaskRunWorkspace(fixture.projectDir, {
+      taskContract: taskContract([{ repository: "web", access: "read-only" }]),
+      taskRunId: "run-invalid-revision",
+      manifest: fixture.manifest,
+      control: {
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+      },
+    });
+    await writeFile(invalid.revisionSetPath, "{ invalid json\n");
+    await expect(
+      prepareTaskRunWorkspace(fixture.projectDir, {
+        taskContract: taskContract([{ repository: "web", access: "read-only" }]),
+        taskRunId: "run-invalid-revision",
+        manifest: fixture.manifest,
+        control: {
+          expectedUrl: control.remoteDir,
+          defaultBranch: "main",
+        },
+      }),
+    ).rejects.toThrow("Existing TaskRun revision-set.json is invalid");
+    await expect(readFile(invalid.revisionSetPath, "utf8")).resolves.toBe(
+      "{ invalid json\n",
+    );
+
+    const inconsistent = await prepareTaskRunWorkspace(fixture.projectDir, {
+      taskContract: taskContract([{ repository: "web", access: "read-only" }]),
+      taskRunId: "run-inconsistent-revision",
+      manifest: fixture.manifest,
+      control: {
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+      },
+    });
+    await writeFile(
+      inconsistent.metadataPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          taskId: "SFL-017",
+          taskRunId: "run-inconsistent-revision",
+          bundleRoot: inconsistent.bundleRoot,
+          runtimeDirectory: inconsistent.runtimeDirectory,
+          repositoriesDirectory: inconsistent.repositoriesDirectory,
+          revisionSetPath: inconsistent.revisionSetPath,
+          repositories: [
+            {
+              ...inconsistent.repositories[0],
+              baseCommit: "0".repeat(40),
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await expect(
+      prepareTaskRunWorkspace(fixture.projectDir, {
+        taskContract: taskContract([{ repository: "web", access: "read-only" }]),
+        taskRunId: "run-inconsistent-revision",
+        manifest: fixture.manifest,
+        control: {
+          expectedUrl: control.remoteDir,
+          defaultBranch: "main",
+        },
+      }),
+    ).rejects.toThrow(
+      "Existing TaskRun workspace metadata is inconsistent with revision-set.json",
+    );
+  }, GIT_TEST_TIMEOUT_MS);
+
+  it("fails closed for branch conflicts, repository identity mismatches, and interrupted bundle directories", async () => {
+    const fixture = await createProjectFixture();
+    const control = await createRemoteFixture(fixture.rootDir, "control");
+    await rm(fixture.projectDir, { force: true, recursive: true });
+    await git(fixture.rootDir, "clone", control.remoteDir, fixture.projectDir);
+    await bootstrapWorkspace(fixture.projectDir, fixture.manifest);
+    await git(fixture.projectDir, "branch", "scaflow/SFL-017/run-conflict/control");
+
+    await expect(
+      prepareTaskRunWorkspace(fixture.projectDir, {
+        taskContract: taskContract([
+          { repository: "@control", access: "read-write" },
+        ]),
+        taskRunId: "run-conflict",
+        manifest: fixture.manifest,
+        control: {
+          expectedUrl: control.remoteDir,
+          defaultBranch: "main",
+        },
+      }),
+    ).rejects.toThrow();
+
+    await git(
+      join(fixture.projectDir, "workspace", "repos", "web"),
+      "remote",
+      "set-url",
+      "origin",
+      `${fixture.remoteDir}-wrong`,
+    );
+    await expect(
+      prepareTaskRunWorkspace(fixture.projectDir, {
+        taskContract: taskContract([
+          { repository: "web", access: "read-only" },
+        ]),
+        taskRunId: "run-mismatch",
+        manifest: fixture.manifest,
+        control: {
+          expectedUrl: control.remoteDir,
+          defaultBranch: "main",
+        },
+      }),
+    ).rejects.toMatchObject({ code: "GIT_REMOTE_MISMATCH" });
+
+    const interruptedFixture = await createProjectFixture();
+    const interruptedControl = await createRemoteFixture(
+      interruptedFixture.rootDir,
+      "control-interrupted",
+    );
+    await rm(interruptedFixture.projectDir, { force: true, recursive: true });
+    await git(
+      interruptedFixture.rootDir,
+      "clone",
+      interruptedControl.remoteDir,
+      interruptedFixture.projectDir,
+    );
+    await bootstrapWorkspace(
+      interruptedFixture.projectDir,
+      interruptedFixture.manifest,
+    );
+    await mkdir(
+      join(
+        interruptedFixture.projectDir,
+        "workspace",
+        "runs",
+        "SFL-017",
+        "run-interrupted",
+        "repositories",
+        "web",
+      ),
+      { recursive: true },
+    );
+    await expect(
+      prepareTaskRunWorkspace(interruptedFixture.projectDir, {
+        taskContract: taskContract([
+          { repository: "web", access: "read-only" },
+        ]),
+        taskRunId: "run-interrupted",
+        manifest: interruptedFixture.manifest,
+        control: {
+          expectedUrl: interruptedControl.remoteDir,
+          defaultBranch: "main",
+        },
+      }),
+    ).rejects.toThrow("is not a Git worktree root");
+    await expect(
+      readFile(
+        join(
+          interruptedFixture.projectDir,
+          "workspace",
+          "runs",
+          "SFL-017",
+          "run-interrupted",
+          "revision-set.json",
+        ),
+        "utf8",
+      ),
+    ).resolves.toContain('"version": 1');
+  }, GIT_TEST_TIMEOUT_MS);
 });
+
+function taskContract(
+  scopes: readonly TaskContractLike["repositories"]["scopes"][number][],
+): TaskContractLike {
+  return {
+    task: {
+      id: "SFL-017",
+      definition_state: "ready",
+    },
+    repositories: {
+      scopes,
+    },
+  };
+}
 
 async function createProjectFixture(): Promise<{
   rootDir: string;

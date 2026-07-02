@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -138,6 +138,10 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
       }
       if (name === "task" && child === "validate") {
         registerTaskValidate(group, cwd, io, options.createCorrelationId);
+        continue;
+      }
+      if (name === "task" && child === "prepare") {
+        registerTaskPrepare(group, cwd, io, options.createCorrelationId);
         continue;
       }
       registerStub(group, child, options.createCorrelationId);
@@ -587,6 +591,124 @@ function registerTaskValidate(
       }
 
       io.stdout.write(`Task Contract ${summary.id} is valid\n`);
+    });
+}
+
+function registerTaskPrepare(
+  parent: Command,
+  cwd: string,
+  io: CliIo,
+  createCorrelationId?: () => string,
+): void {
+  parent
+    .command("prepare")
+    .description("prepare an isolated TaskRun workspace")
+    .argument("<task-id>", "Task ID")
+    .option("--run-id <task-run-id>", "TaskRun ID")
+    .action(async (taskId: string, commandOptions: { runId?: string }) => {
+      const correlationId = createCorrelationId?.();
+      const taskRunId = commandOptions.runId ?? defaultTaskRunId();
+      const [config, git, state, workspace] = await Promise.all([
+        loadConfigModule(),
+        loadGitModule(),
+        loadStateModule(),
+        loadWorkspaceModule(),
+      ]);
+      const [localProject, taskContract, controlRemoteUrl] = await Promise.all([
+        config.validateLocalProject(
+          cwd,
+          correlationId === undefined ? {} : { correlationId },
+        ),
+        config.loadTaskContract(
+          cwd,
+          taskId,
+          correlationId === undefined ? {} : { correlationId },
+        ),
+        git.getRemoteUrl({ cwd }),
+      ]);
+
+      const storePath = join(cwd, ".scaflow", "state.db");
+      await mkdir(join(cwd, ".scaflow"), { recursive: true });
+      const store = state.openStateStore(storePath);
+      store.initialize();
+
+      let taskRunState = state.getRuntimeState(store, "task_run", taskRunId);
+      if (taskRunState === undefined) {
+        taskRunState = state.initializeRuntimeState(store, {
+          domain: "task_run",
+          entityId: taskRunId,
+          state: "queued",
+          ...(correlationId === undefined ? {} : { correlationId }),
+          payload: { taskId },
+        });
+      }
+
+      try {
+        if (taskRunState.state === "queued") {
+          taskRunState = state.transitionRuntimeState(store, {
+            domain: "task_run",
+            entityId: taskRunId,
+            to: "preparing",
+            ...(correlationId === undefined ? {} : { correlationId }),
+            payload: { taskId },
+          });
+        }
+        if (
+          taskRunState.state !== "preparing" &&
+          taskRunState.state !== "running"
+        ) {
+          throw new ScaflowError("TaskRun is not in a preparable state", {
+            code: "TASK_RUN_STATE_INVALID",
+            recoverable: false,
+            suggestion: "Use a new TaskRun ID or inspect the existing TaskRun state",
+            ...(correlationId === undefined ? {} : { correlationId }),
+            details: { taskRunId, state: taskRunState.state },
+          });
+        }
+
+        const result = await workspace.prepareTaskRunWorkspace(cwd, {
+          taskContract,
+          taskRunId,
+          manifest: readRepositoryManifest(localProject),
+          control: {
+            expectedUrl: controlRemoteUrl,
+            defaultBranch: "main",
+          },
+        });
+        if (taskRunState.state === "preparing") {
+          taskRunState = state.transitionRuntimeState(store, {
+            domain: "task_run",
+            entityId: taskRunId,
+            to: "running",
+            ...(correlationId === undefined ? {} : { correlationId }),
+            payload: {
+              taskId,
+              bundleRoot: result.bundleRoot,
+              revisionSetPath: result.revisionSetPath,
+            },
+          });
+        }
+
+        if (parent.parent?.opts().json === true) {
+          io.stdout.write(`${JSON.stringify({ taskRun: result, state: taskRunState })}\n`);
+          return;
+        }
+
+        io.stdout.write(renderTaskPrepareHuman(result, taskRunState.state));
+      } catch (error) {
+        if (taskRunState.state === "preparing") {
+          state.transitionRuntimeState(store, {
+            domain: "task_run",
+            entityId: taskRunId,
+            to: "failed",
+            ...(correlationId === undefined ? {} : { correlationId }),
+            payload: { taskId, error: serializeDoctorError(error) },
+          });
+        }
+        throw error;
+      } finally {
+        store.close();
+      }
     });
 }
 
@@ -1040,6 +1162,26 @@ function renderTaskShowHuman(contract: unknown): string {
   ].join("\n");
 }
 
+function renderTaskPrepareHuman(
+  result: PrepareTaskRunWorkspaceResult,
+  state: string,
+): string {
+  return [
+    `TaskRun ${result.taskRunId}: ${state}`,
+    `Task: ${result.taskId}`,
+    `Bundle: ${result.bundleRoot}`,
+    `Revision Set: ${result.revisionSetPath}`,
+    ...result.repositories.map((repository) => {
+      const target =
+        repository.branchName === undefined
+          ? "detached"
+          : `branch=${repository.branchName}`;
+      return `[${repository.mode}] ${repository.id}: ${target}`;
+    }),
+    "",
+  ].join("\n");
+}
+
 function readProjectConfig(result: unknown): unknown {
   if (
     typeof result === "object" &&
@@ -1193,6 +1335,18 @@ interface WorkspaceManifest {
   readonly repositories: readonly { readonly id: string }[];
 }
 
+interface PrepareTaskRunWorkspaceResult {
+  readonly taskId: string;
+  readonly taskRunId: string;
+  readonly bundleRoot: string;
+  readonly revisionSetPath: string;
+  readonly repositories: readonly {
+    readonly id: string;
+    readonly mode: "detached" | "branch";
+    readonly branchName?: string;
+  }[];
+}
+
 interface WorkspaceModule {
   readonly bootstrapWorkspace: (
     projectDirectory: string,
@@ -1205,12 +1359,63 @@ interface WorkspaceModule {
   readonly readWorkspaceManifest: (
     projectDirectory: string,
   ) => Promise<WorkspaceManifest>;
+  readonly prepareTaskRunWorkspace: (
+    projectDirectory: string,
+    options: {
+      readonly taskContract: unknown;
+      readonly taskRunId: string;
+      readonly manifest: unknown;
+      readonly control: {
+        readonly expectedUrl: string;
+        readonly defaultBranch: string;
+      };
+    },
+  ) => Promise<PrepareTaskRunWorkspaceResult>;
 }
 
 interface GitModule {
   readonly getRepositoryStatus: (options: {
     readonly cwd: string;
   }) => Promise<unknown>;
+  readonly getRemoteUrl: (options: { readonly cwd: string }) => Promise<string>;
+}
+
+interface StateModule {
+  readonly openStateStore: (databasePath: string) => StateStoreLike;
+  readonly getRuntimeState: (
+    store: StateStoreLike,
+    domain: "task_run",
+    entityId: string,
+  ) => RuntimeStateRecord | undefined;
+  readonly initializeRuntimeState: (
+    store: StateStoreLike,
+    input: {
+      readonly domain: "task_run";
+      readonly entityId: string;
+      readonly state: "queued";
+      readonly correlationId?: string;
+      readonly payload?: unknown;
+    },
+  ) => RuntimeStateRecord;
+  readonly transitionRuntimeState: (
+    store: StateStoreLike,
+    input: {
+      readonly domain: "task_run";
+      readonly entityId: string;
+      readonly to: "preparing" | "running" | "failed";
+      readonly correlationId?: string;
+      readonly payload?: unknown;
+    },
+  ) => RuntimeStateRecord;
+}
+
+interface StateStoreLike {
+  initialize(): void;
+  close(): void;
+}
+
+interface RuntimeStateRecord {
+  readonly state: string;
 }
 
 function isScaflowErrorLike(caught: unknown): caught is ScaflowError {
@@ -1237,17 +1442,27 @@ async function loadGitModule(): Promise<GitModule> {
   return (await import(workspaceModuleUrl("git"))) as GitModule;
 }
 
+async function loadStateModule(): Promise<StateModule> {
+  return (await import(workspaceModuleUrl("state"))) as StateModule;
+}
+
 async function loadWorkspaceModule(): Promise<WorkspaceModule> {
   return (await import(workspaceModuleUrl("workspace"))) as WorkspaceModule;
 }
 
-function workspaceModuleUrl(packageName: "config" | "git" | "template" | "workspace"): string {
+function workspaceModuleUrl(
+  packageName: "config" | "git" | "state" | "template" | "workspace",
+): string {
   const currentPath = fileURLToPath(import.meta.url);
   const modulePath = currentPath.includes("/src/")
     ? `../../../packages/${packageName}/src/index.ts`
     : `../../../packages/${packageName}/dist/index.js`;
 
   return new URL(modulePath, import.meta.url).href;
+}
+
+function defaultTaskRunId(): string {
+  return `run-${new Date().toISOString().replaceAll(/[^0-9A-Za-z]+/g, "").toLowerCase()}`;
 }
 
 const invokedPath = process.argv[1];

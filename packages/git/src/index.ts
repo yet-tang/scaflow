@@ -6,13 +6,15 @@ const execFileAsync = promisify(execFile);
 export const packageName = "@scaflow/git";
 
 export type GitOperation =
+  | "branch"
   | "clone"
   | "fetch"
   | "freeze-revision"
   | "head"
   | "identity"
   | "remote-url"
-  | "status";
+  | "status"
+  | "worktree";
 
 export type GitErrorCode =
   | "GIT_COMMAND_FAILED"
@@ -86,6 +88,19 @@ export interface RepositoryIdentityOptions {
   cwd: string;
   remote?: string;
   expectedUrl: string;
+}
+
+export interface AddDetachedWorktreeOptions {
+  sourceCwd: string;
+  targetDir: string;
+  commit: string;
+}
+
+export interface AddBranchWorktreeOptions {
+  sourceCwd: string;
+  targetDir: string;
+  branchName: string;
+  commit: string;
 }
 
 export type RepositoryAccessMode = "read-only" | "read-write";
@@ -225,6 +240,70 @@ export async function getHeadCommit(
   });
 
   return result.stdout.trim();
+}
+
+export async function getRepositoryRoot(
+  options: HeadCommitOptions,
+): Promise<string> {
+  const result = await runGit({
+    operation: "identity",
+    cwd: options.cwd,
+    args: ["rev-parse", "--show-toplevel"],
+  });
+
+  return result.stdout.trim();
+}
+
+export async function getCurrentBranch(
+  options: HeadCommitOptions,
+): Promise<string | null> {
+  try {
+    const result = await runGit({
+      operation: "branch",
+      cwd: options.cwd,
+      args: ["symbolic-ref", "--quiet", "--short", "HEAD"],
+    });
+
+    return result.stdout.trim();
+  } catch (error) {
+    if (isGitErrorWithExitStatus(error, 1)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function addDetachedWorktree(
+  options: AddDetachedWorktreeOptions,
+): Promise<void> {
+  assertExplicitDirectory(options.sourceCwd, "cwd", "worktree");
+  assertExplicitDirectory(options.targetDir, "targetDir", "worktree");
+
+  await runGit({
+    operation: "worktree",
+    cwd: options.sourceCwd,
+    args: ["worktree", "add", "--detach", options.targetDir, options.commit],
+  });
+}
+
+export async function addBranchWorktree(
+  options: AddBranchWorktreeOptions,
+): Promise<void> {
+  assertExplicitDirectory(options.sourceCwd, "cwd", "worktree");
+  assertExplicitDirectory(options.targetDir, "targetDir", "worktree");
+
+  await runGit({
+    operation: "worktree",
+    cwd: options.sourceCwd,
+    args: [
+      "worktree",
+      "add",
+      "-b",
+      options.branchName,
+      options.targetDir,
+      options.commit,
+    ],
+  });
 }
 
 export async function getRemoteUrl(options: RemoteUrlOptions): Promise<string> {
@@ -468,6 +547,13 @@ function isGitErrorWithCode<TCode extends GitErrorCode>(
   code: TCode,
 ): error is GitError & { code: TCode } {
   return error instanceof GitError && error.code === code;
+}
+
+function isGitErrorWithExitStatus(
+  error: unknown,
+  exitStatus: number,
+): error is GitError {
+  return error instanceof GitError && error.details.exitStatus === exitStatus;
 }
 
 function normalizeRemoteUrl(url: string): string {

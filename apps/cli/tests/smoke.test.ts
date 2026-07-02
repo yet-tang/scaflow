@@ -18,6 +18,7 @@ import {
 } from "../src/index";
 
 const execFileAsync = promisify(execFile);
+const CLI_GIT_TEST_TIMEOUT_MS = 15_000;
 const temporaryDirectories: string[] = [];
 
 async function temporaryDirectory(prefix: string): Promise<string> {
@@ -101,20 +102,59 @@ describe("@scaflow/cli", () => {
     );
   });
 
-  it("keeps later task lifecycle commands as stubs", async () => {
+  it("prepares a TaskRun workspace and records runtime state", async () => {
+    const fixture = await createCliProjectWithRemote("scaflow-cli-prepare-");
+    await writeTaskContract(
+      fixture.projectDir,
+      "SFL-017",
+      taskPrepareContractYaml(),
+    );
+    await git(fixture.projectDir, "add", "tasks/SFL-017/contract.yaml");
+    await git(fixture.projectDir, "commit", "-m", "Add SFL-017 contract");
+    expect(
+      await runCli({
+        argv: ["bootstrap"],
+        cwd: fixture.projectDir,
+        io: createOutput().io,
+      }),
+    ).toBe(0);
     const output = createOutput();
 
     const exitCode = await runCli({
-      argv: ["task", "prepare", "SFL-999"],
+      argv: ["--json", "task", "prepare", "SFL-017", "--run-id", "run-cli"],
+      cwd: fixture.projectDir,
       io: output.io,
-      createCorrelationId: () => "task-prepare-stub",
+      createCorrelationId: () => "task-prepare",
     });
 
-    expect(exitCode).toBe(1);
-    expect(output.stderr()).toContain(
-      'Command "task prepare" is not implemented in Scaflow v0.1.0 yet',
+    expect(exitCode).toBe(0);
+    expect(output.stderr()).toBe("");
+    const result = JSON.parse(output.stdout()) as {
+      taskRun: {
+        taskId: string;
+        taskRunId: string;
+        bundleRoot: string;
+        revisionSetPath: string;
+        repositories: Array<{ id: string; mode: string }>;
+      };
+      state: { state: string };
+    };
+    expect(result).toMatchObject({
+      taskRun: {
+        taskId: "SFL-017",
+        taskRunId: "run-cli",
+        repositories: [
+          { id: "@control", mode: "branch" },
+          { id: "app", mode: "detached" },
+        ],
+      },
+      state: { state: "running" },
+    });
+    await expect(stat(join(result.taskRun.bundleRoot, ".git"))).rejects.toThrow();
+    await expect(readFile(result.taskRun.revisionSetPath, "utf8")).resolves.toContain(
+      '"id": "app"',
     );
-  });
+  }, CLI_GIT_TEST_TIMEOUT_MS);
 
   it.each([
     ["before", ["--json", "changeset", "show"]],
@@ -712,7 +752,7 @@ describe("@scaflow/cli", () => {
         }),
       ]),
     );
-  });
+  }, CLI_GIT_TEST_TIMEOUT_MS);
 
   it("renders repository and workspace status for bootstrapped projects", async () => {
     const fixture = await createCliProjectWithRemote("scaflow-cli-status-");
@@ -748,7 +788,7 @@ describe("@scaflow/cli", () => {
       manifestPresent: true,
       repositories: [{ id: "app", identity: "matching" }],
     });
-  });
+  }, CLI_GIT_TEST_TIMEOUT_MS);
 });
 
 function createOutput(): {
@@ -789,6 +829,7 @@ async function createCliProjectWithRemote(prefix: string): Promise<{
 }> {
   const rootDir = await temporaryDirectory(prefix);
   const projectDir = join(rootDir, "project");
+  const controlRemoteDir = join(rootDir, "control.git");
   const sourceDir = join(rootDir, "source");
   const remoteDir = join(rootDir, "remote.git");
 
@@ -829,6 +870,13 @@ async function createCliProjectWithRemote(prefix: string): Promise<{
     })}\n`,
   );
   await git(projectDir, "init");
+  await git(projectDir, "config", "user.name", "Scaflow Test");
+  await git(projectDir, "config", "user.email", "scaflow@example.invalid");
+  await git(projectDir, "add", "scaflow.yaml", "repositories.yaml");
+  await git(projectDir, "commit", "-m", "Initial control commit");
+  await git(projectDir, "init", "--bare", controlRemoteDir);
+  await git(projectDir, "remote", "add", "origin", controlRemoteDir);
+  await git(projectDir, "push", "origin", "HEAD:main");
 
   return { rootDir, projectDir, remoteDir };
 }
@@ -881,6 +929,48 @@ verification:
         - "@scaflow/schemas"
         - test
         - HEAD:main
+      timeout_seconds: 300
+      required: true
+retry_policy:
+  max_attempts: 2
+  max_repair_rounds_per_attempt: 3
+  escalate_after_same_failure: 2
+`;
+}
+
+function taskPrepareContractYaml(): string {
+  return `version: 1
+task:
+  id: SFL-017
+  title: TaskRun Workspace
+  type: workspace
+  risk_level: R3
+  definition_state: ready
+objective:
+  summary: Prepare TaskRun workspaces.
+source_requirements:
+  - id: FR-006
+    document: docs/source/scaflow-v0.1.0-prd.md
+dependencies:
+  - SFL-006
+dependency_changes: forbidden
+repositories:
+  primary: "@control"
+  scopes:
+    - repository: "@control"
+      access: read-write
+      allowed_paths:
+        - packages/workspace/**
+    - repository: app
+      access: read-only
+acceptance_criteria:
+  - id: SFL-017-AC-01
+    description: task prepare creates a TaskRun bundle.
+verification:
+  commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/workspace", "test"]
       timeout_seconds: 300
       required: true
 retry_policy:
