@@ -4,7 +4,7 @@ task:
   title: TaskRun Workspace
   type: workspace
   risk_level: R3
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Implement task prepare, TaskRun Bundle directories, and isolated read-only/read-write worktrees.
 source_requirements:
