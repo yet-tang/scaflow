@@ -1,5 +1,5 @@
 import { access, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { dirname, join, normalize, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const packageName = "@scaflow/workspace";
@@ -33,16 +33,125 @@ export type RepositoryAccessMode = "read-only" | "read-write";
 export interface TaskRepositoryScopeLike {
   readonly repository: string;
   readonly access: RepositoryAccessMode;
+  readonly allowed_paths?: readonly string[];
+  readonly forbidden_paths?: readonly string[];
 }
 
 export interface TaskContractLike {
   readonly task: {
     readonly id: string;
+    readonly title?: string;
     readonly definition_state: string;
   };
+  readonly objective?: {
+    readonly summary: string;
+  };
+  readonly source_requirements?: readonly TaskDocumentReferenceLike[];
+  readonly source_references?: readonly TaskSourceReferenceLike[];
   readonly repositories: {
+    readonly primary?: string;
     readonly scopes: readonly TaskRepositoryScopeLike[];
   };
+  readonly verification?: {
+    readonly commands: readonly TaskVerificationCommandLike[];
+  };
+}
+
+export interface TaskDocumentReferenceLike {
+  readonly id?: string;
+  readonly document: string;
+}
+
+export interface TaskSourceReferenceLike {
+  readonly document: string;
+  readonly section?: string;
+}
+
+export interface TaskVerificationCommandLike {
+  readonly repository: string;
+  readonly executable: string;
+  readonly args: readonly string[];
+  readonly timeout_seconds: number;
+  readonly required: boolean;
+}
+
+export interface AssembleTaskRunContextOptions {
+  readonly taskRunWorkspace: PrepareTaskRunWorkspaceResult;
+  readonly taskContract: TaskContractContextLike;
+  readonly projectKnowledgeFiles?: readonly string[];
+  readonly previousFailureSummary?: string;
+}
+
+export interface TaskContractContextLike extends TaskContractLike {
+  readonly objective?: {
+    readonly summary: string;
+  };
+  readonly source_requirements?: readonly {
+    readonly id: string;
+    readonly document: string;
+  }[];
+  readonly source_references?: readonly {
+    readonly document: string;
+    readonly section?: string;
+  }[];
+  readonly acceptance_criteria?: readonly {
+    readonly id: string;
+    readonly description: string;
+  }[];
+  readonly verification?: {
+    readonly commands: readonly TaskVerificationCommandLike[];
+  };
+}
+
+export interface TaskRunContextManifest {
+  readonly version: 1;
+  readonly task: {
+    readonly id: string;
+    readonly title?: string;
+  };
+  readonly control: {
+    readonly mode: "undeclared" | "read-only" | "read-write";
+    readonly declared: boolean;
+    readonly worktreePath?: string;
+  };
+  readonly files: {
+    readonly agents: string;
+    readonly manifest: string;
+    readonly taskContract: string;
+    readonly projectKnowledge: readonly TaskRunContextProjectKnowledgeEntry[];
+    readonly failureSummary?: string;
+  };
+  readonly repositories: readonly TaskRunContextRepositorySummary[];
+  readonly verificationCommands: readonly TaskVerificationCommandLike[];
+  readonly exclusions: readonly string[];
+}
+
+export interface TaskRunContextProjectKnowledgeEntry {
+  readonly source: string;
+  readonly snapshot: string;
+}
+
+export interface TaskRunContextRepositorySummary {
+  readonly id: string;
+  readonly access: RepositoryAccessMode;
+  readonly baseCommit: string;
+  readonly checkoutDirectory: string;
+  readonly worktreePath?: string;
+  readonly mode?: "detached" | "branch";
+  readonly branchName?: string;
+  readonly writable: boolean;
+  readonly allowedPaths: readonly string[];
+  readonly forbiddenPaths: readonly string[];
+}
+
+export interface AssembleTaskRunContextResult {
+  readonly agentsPath: string;
+  readonly contextManifestPath: string;
+  readonly contextDirectory: string;
+  readonly taskContractSnapshotPath: string;
+  readonly projectKnowledgeSnapshotPaths: readonly string[];
+  readonly failureSummaryPath?: string;
+  readonly manifest: TaskRunContextManifest;
 }
 
 export interface FreezeWorkspaceRevisionSetOptions {
@@ -418,6 +527,485 @@ export async function prepareTaskRunWorkspace(
     revisionSet,
     repositories: metadata.repositories,
   };
+}
+
+export async function assembleTaskRunContext(
+  projectDirectory: string,
+  options: AssembleTaskRunContextOptions,
+): Promise<AssembleTaskRunContextResult> {
+  const taskId = normalizeTaskRunSegment(
+    options.taskRunWorkspace.taskId,
+    "Task ID",
+  );
+  if (options.taskContract.task.id !== taskId) {
+    throw new Error("TaskRun context task contract does not match workspace task ID");
+  }
+
+  const bundleRoot = options.taskRunWorkspace.bundleRoot;
+  const contextDirectory = join(bundleRoot, "context");
+  const knowledgeDirectory = join(contextDirectory, "project-knowledge");
+  await reconcileGeneratedContextArtifacts(contextDirectory);
+
+  const taskContractSnapshotPath = join(contextDirectory, "task-contract.json");
+  await writeJsonFile(taskContractSnapshotPath, options.taskContract);
+
+  const projectKnowledge = await writeProjectKnowledgeSnapshots(
+    projectDirectory,
+    knowledgeDirectory,
+    options.projectKnowledgeFiles ?? defaultProjectKnowledgeFiles(),
+  );
+
+  const previousFailureSummary = options.previousFailureSummary;
+  let failureSummaryPath: string | undefined;
+  if (previousFailureSummary !== undefined) {
+    failureSummaryPath = join(contextDirectory, "failure-summary.md");
+    await writeFile(failureSummaryPath, redactedText(previousFailureSummary), "utf8");
+  }
+
+  const agentsPath = join(bundleRoot, "AGENTS.md");
+  const contextManifestPath = join(bundleRoot, "context-manifest.json");
+  const manifest: TaskRunContextManifest = {
+    version: 1,
+    task: {
+      id: taskId,
+      ...(options.taskContract.task.title === undefined
+        ? {}
+        : { title: options.taskContract.task.title }),
+    },
+    control: controlContextSummary(options.taskContract, options.taskRunWorkspace),
+    files: {
+      agents: bundleRelativePath(bundleRoot, agentsPath),
+      manifest: bundleRelativePath(bundleRoot, contextManifestPath),
+      taskContract: bundleRelativePath(bundleRoot, taskContractSnapshotPath),
+      projectKnowledge: projectKnowledge.snapshots.map((entry) => ({
+        source: entry.source,
+        snapshot: bundleRelativePath(bundleRoot, entry.snapshotPath),
+      })),
+      ...(failureSummaryPath === undefined
+        ? {}
+        : { failureSummary: bundleRelativePath(bundleRoot, failureSummaryPath) }),
+    },
+    repositories: repositoryContextSummaries(
+      bundleRoot,
+      options.taskRunWorkspace,
+      options.taskContract,
+    ),
+    verificationCommands: stableVerificationCommands(options.taskContract),
+    exclusions: [
+      ".scaflow/state.db",
+      "workspace/repos/**",
+      "workspace/runs/* except current TaskRun bundle",
+      "user home paths",
+      "secret-looking files and secret-looking content",
+      "undeclared repository source",
+      ...projectKnowledge.exclusions,
+    ],
+  };
+
+  await writeFile(agentsPath, renderTaskRunAgents(options.taskContract, manifest), "utf8");
+  await writeJsonFile(contextManifestPath, manifest);
+
+  return {
+    agentsPath,
+    contextManifestPath,
+    contextDirectory,
+    taskContractSnapshotPath,
+    projectKnowledgeSnapshotPaths: projectKnowledge.snapshots.map(
+      (entry) => entry.snapshotPath,
+    ),
+    ...(failureSummaryPath === undefined ? {} : { failureSummaryPath }),
+    manifest,
+  };
+}
+
+function defaultProjectKnowledgeFiles(): readonly string[] {
+  return [
+    "AGENTS.md",
+    "PRODUCT.md",
+    "ARCHITECTURE.md",
+    "docs/source/scaflow-v0.1.0-prd.md",
+    "docs/architecture/scaflow-v0.2-baseline.md",
+  ];
+}
+
+async function writeProjectKnowledgeSnapshots(
+  projectDirectory: string,
+  knowledgeDirectory: string,
+  files: readonly string[],
+): Promise<{
+  readonly snapshots: readonly {
+    readonly source: string;
+    readonly snapshotPath: string;
+  }[];
+  readonly exclusions: readonly string[];
+}> {
+  const snapshots: {
+    readonly source: string;
+    readonly snapshotPath: string;
+  }[] = [];
+  const exclusions: string[] = [];
+
+  for (const source of [...files].sort()) {
+    const normalizedSource = normalizeProjectKnowledgePath(source);
+    const sourcePath = resolve(projectDirectory, normalizedSource);
+    const realSourcePath = await assertProjectKnowledgeSource(
+      projectDirectory,
+      normalizedSource,
+      sourcePath,
+    );
+
+    let contents: string;
+    try {
+      contents = await readFile(realSourcePath, "utf8");
+    } catch (error) {
+      throw new Error(
+        `Project knowledge source is not readable: ${normalizedSource}`,
+        { cause: error },
+      );
+    }
+
+    const containsSensitiveContent = containsSensitiveKnowledge(contents);
+    const snapshotPath = join(
+      knowledgeDirectory,
+      `${snapshots.length.toString().padStart(2, "0")}-${snapshotName(normalizedSource)}`,
+    );
+    await writeFile(snapshotPath, redactedText(contents), "utf8");
+    snapshots.push({
+      source: normalizedSource,
+      snapshotPath,
+    });
+    if (containsSensitiveContent) {
+      exclusions.push(`${normalizedSource}: sensitive content redacted`);
+    }
+  }
+
+  return { snapshots, exclusions };
+}
+
+async function reconcileGeneratedContextArtifacts(
+  contextDirectory: string,
+): Promise<void> {
+  await rm(join(contextDirectory, "project-knowledge"), {
+    force: true,
+    recursive: true,
+  });
+  await rm(join(contextDirectory, "failure-summary.md"), { force: true });
+  await mkdir(join(contextDirectory, "project-knowledge"), { recursive: true });
+}
+
+async function assertProjectKnowledgeSource(
+  projectDirectory: string,
+  normalizedSource: string,
+  sourcePath: string,
+): Promise<string> {
+  const result = await projectKnowledgeExclusionReason(
+    projectDirectory,
+    normalizedSource,
+    sourcePath,
+  );
+  if (result.reason === undefined) {
+    return result.realSourcePath;
+  }
+
+  const displayPath = displayExcludedPath(normalizedSource);
+  if (result.reason === "unrelated_source") {
+    throw new Error(`Project knowledge source is unrelated: ${displayPath}`);
+  }
+  if (result.reason === "secret_path") {
+    throw new Error(
+      `Project knowledge source looks secret-bearing: ${displayPath}`,
+    );
+  }
+  throw new Error(`Project knowledge source is excluded: ${displayPath}`);
+}
+
+function repositoryContextSummaries(
+  bundleRoot: string,
+  workspace: PrepareTaskRunWorkspaceResult,
+  taskContract: TaskContractContextLike,
+): readonly TaskRunContextRepositorySummary[] {
+  const worktreeById = new Map(
+    workspace.repositories.map((repository) => [repository.id, repository]),
+  );
+  const scopeById = new Map(
+    taskContract.repositories.scopes.map((scope) => [scope.repository, scope]),
+  );
+  return [workspace.revisionSet.control, ...workspace.revisionSet.repositories].map(
+    (repository) => {
+      const prepared = worktreeById.get(repository.id);
+      const scope = scopeById.get(repository.id);
+      return {
+        id: repository.id,
+        access: repository.access,
+        baseCommit: repository.base_commit,
+        checkoutDirectory: repository.checkout_directory,
+        ...(prepared === undefined
+          ? {}
+          : {
+              worktreePath: bundleRelativePath(bundleRoot, prepared.worktreePath),
+              mode: prepared.mode,
+              ...(prepared.branchName === undefined
+                ? {}
+                : { branchName: prepared.branchName }),
+            }),
+        writable: repository.access === "read-write" && prepared !== undefined,
+        allowedPaths: [...(scope?.allowed_paths ?? [])].sort(),
+        forbiddenPaths: [...(scope?.forbidden_paths ?? [])].sort(),
+      };
+    },
+  );
+}
+
+function controlContextSummary(
+  taskContract: TaskContractContextLike,
+  workspace: PrepareTaskRunWorkspaceResult,
+): TaskRunContextManifest["control"] {
+  const controlScope = taskContract.repositories.scopes.find(
+    (scope) => scope.repository === "@control",
+  );
+  const controlWorktree = workspace.repositories.find(
+    (repository) => repository.id === "@control",
+  );
+  if (controlScope === undefined) {
+    return { mode: "undeclared", declared: false };
+  }
+  if (controlScope.access === "read-only") {
+    return { mode: "read-only", declared: true };
+  }
+  return {
+    mode: "read-write",
+    declared: true,
+    ...(controlWorktree === undefined
+      ? {}
+      : {
+          worktreePath: bundleRelativePath(
+            workspace.bundleRoot,
+            controlWorktree.worktreePath,
+          ),
+        }),
+  };
+}
+
+function stableVerificationCommands(
+  taskContract: TaskContractContextLike,
+): readonly TaskVerificationCommandLike[] {
+  return [...(taskContract.verification?.commands ?? [])].map((command) => ({
+    repository: command.repository,
+    executable: command.executable,
+    args: [...command.args],
+    timeout_seconds: command.timeout_seconds,
+    required: command.required,
+  }));
+}
+
+function renderTaskRunAgents(
+  taskContract: TaskContractContextLike,
+  manifest: TaskRunContextManifest,
+): string {
+  const scopeLines = taskContract.repositories.scopes
+    .map((scope) => `- ${scope.repository}: ${scope.access}`)
+    .join("\n");
+  const commandLines = manifest.verificationCommands
+    .map((command) =>
+      `- ${command.repository}: ${command.executable} ${JSON.stringify(command.args)}`,
+    )
+    .join("\n");
+
+  return `# Scaflow TaskRun Instructions
+
+Task ID: ${taskContract.task.id}
+
+## Scope
+
+Implement only the approved Task Contract represented in ${manifest.files.taskContract}.
+Task definition state is separate from TaskRun execution state. Do not mark the shared Task completed.
+
+## Repository Access
+
+${scopeLines}
+
+Use only the prepared TaskRun worktrees listed in context-manifest.json. Do not modify workspace/repos/ or other TaskRuns.
+
+## Context
+
+- Manifest: ${manifest.files.manifest}
+- Project knowledge snapshots: context/project-knowledge/
+- Repository summaries and verification commands are structured in context-manifest.json.
+
+## Security
+
+Do not read or expose secrets, user home content, .scaflow/state.db, unrelated source, workspace/repos/, or other TaskRuns.
+
+## Verification Commands
+
+${commandLines}
+
+Commands must be executed as structured executable/args definitions, not arbitrary shell strings.
+`;
+}
+
+function normalizeProjectKnowledgePath(path: string): string {
+  const normalized = normalize(path).replaceAll("\\", "/");
+  if (
+    normalized === "" ||
+    normalized === "." ||
+    normalized.startsWith("../") ||
+    normalized === ".." ||
+    isAbsolute(path)
+  ) {
+    throw new Error(`Project knowledge path must be relative and safe: ${path}`);
+  }
+  return normalized;
+}
+
+function projectKnowledgeExclusionReason(
+  projectDirectory: string,
+  normalizedSource: string,
+  sourcePath: string,
+): Promise<{ readonly reason?: string; readonly realSourcePath: string }> {
+  return realpath(projectDirectory).then(async (projectRoot) => {
+    const realSourcePath = await realpath(sourcePath);
+    const canonicalProjectRelative = relative(projectRoot, realSourcePath).replaceAll(
+      "\\",
+      "/",
+    );
+    if (
+      canonicalProjectRelative.startsWith("../") ||
+      canonicalProjectRelative === ".."
+    ) {
+      return { reason: "outside_project", realSourcePath };
+    }
+    const runtimeExclusion = await canonicalRuntimeExclusionReason(
+      projectRoot,
+      realSourcePath,
+    );
+    if (runtimeExclusion !== undefined) {
+      return { reason: runtimeExclusion, realSourcePath };
+    }
+    if (isForbiddenProjectKnowledgePath(normalizedSource)) {
+      return { reason: "forbidden_runtime_path", realSourcePath };
+    }
+    if (isForbiddenProjectKnowledgePath(canonicalProjectRelative)) {
+      return { reason: "forbidden_runtime_path", realSourcePath };
+    }
+    if (SECRET_FILE_PATTERN.test(basename(normalizedSource))) {
+      return { reason: "secret_path", realSourcePath };
+    }
+    if (SECRET_FILE_PATTERN.test(basename(canonicalProjectRelative))) {
+      return { reason: "secret_path", realSourcePath };
+    }
+    if (!isAllowedProjectKnowledgeSource(normalizedSource)) {
+      return { reason: "unrelated_source", realSourcePath };
+    }
+    if (!isAllowedProjectKnowledgeSource(canonicalProjectRelative)) {
+      return { reason: "unrelated_source", realSourcePath };
+    }
+    return { realSourcePath };
+  });
+}
+
+function isForbiddenProjectKnowledgePath(normalizedSource: string): boolean {
+  return (
+    normalizedSource === ".scaflow/state.db" ||
+    normalizedSource.startsWith(".scaflow/") ||
+    normalizedSource === "workspace/repos" ||
+    normalizedSource.startsWith("workspace/repos/") ||
+    normalizedSource === "workspace/runs" ||
+    normalizedSource.startsWith("workspace/runs/")
+  );
+}
+
+async function canonicalRuntimeExclusionReason(
+  projectRoot: string,
+  realSourcePath: string,
+): Promise<string | undefined> {
+  for (const runtimePath of [
+    ".scaflow",
+    "workspace/repos",
+    "workspace/runs",
+  ]) {
+    const realRuntimePath = await realpathIfExists(join(projectRoot, runtimePath));
+    if (
+      realRuntimePath !== undefined &&
+      isSameOrChildPath(realRuntimePath, realSourcePath)
+    ) {
+      return "forbidden_runtime_path";
+    }
+  }
+  return undefined;
+}
+
+async function realpathIfExists(path: string): Promise<string | undefined> {
+  try {
+    return await realpath(path);
+  } catch {
+    return undefined;
+  }
+}
+
+function isSameOrChildPath(parent: string, child: string): boolean {
+  const relativePath = relative(parent, child).replaceAll("\\", "/");
+  return (
+    relativePath === "" ||
+    (!relativePath.startsWith("../") &&
+      relativePath !== ".." &&
+      !isAbsolute(relativePath))
+  );
+}
+
+function isAllowedProjectKnowledgeSource(normalizedSource: string): boolean {
+  return (
+    normalizedSource === "AGENTS.md" ||
+    normalizedSource === "PRODUCT.md" ||
+    normalizedSource === "ARCHITECTURE.md" ||
+    normalizedSource.startsWith("docs/") ||
+    normalizedSource.startsWith("tasks/")
+  );
+}
+
+function containsSensitiveKnowledge(text: string): boolean {
+  return (
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/.test(
+      text,
+    ) ||
+    /\b(?:AWS_SECRET_ACCESS_KEY|GITHUB_TOKEN|OPENAI_API_KEY)\s*[:=]\s*\S+/i.test(
+      text,
+    ) ||
+    /\b(?:password|passwd|api[_-]?key|access[_-]?token)\s*[:=]\s*\S+/i.test(text)
+  );
+}
+
+function displayExcludedPath(path: string): string {
+  return isAbsolute(path) ? basename(path) : path;
+}
+
+function snapshotName(source: string): string {
+  return source.replace(/[^A-Za-z0-9._-]+/g, "-");
+}
+
+function bundleRelativePath(bundleRoot: string, path: string): string {
+  const relativePath = relative(bundleRoot, path).replaceAll("\\", "/");
+  if (
+    relativePath === "" ||
+    relativePath.startsWith("../") ||
+    relativePath === ".." ||
+    isAbsolute(relativePath)
+  ) {
+    throw new Error(`Context path is outside the TaskRun bundle: ${path}`);
+  }
+  return relativePath;
+}
+
+const SECRET_FILE_PATTERN =
+  /(^\.env($|\.)|secret|credential|token|private[_-]?key|id_rsa|id_ed25519)/i;
+
+function redactedText(text: string): string {
+  return text
+    .replace(
+      /(password|passwd|secret|token|api[_-]?key|private[_-]?key)\s*[:=]\s*[^\s"']+/gi,
+      "$1=[REDACTED]",
+    )
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]");
 }
 
 async function bootstrapRepository(

@@ -1,5 +1,14 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -8,6 +17,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   WORKSPACE_MANIFEST_FILE,
+  assembleTaskRunContext,
   bootstrapWorkspace,
   freezeWorkspaceRevisionSet,
   getWorkspaceStatus,
@@ -16,10 +26,11 @@ import {
   readWorkspaceManifest,
   type RepositoryManifestLike,
   type TaskContractLike,
+  type TaskRepositoryScopeLike,
 } from "../src/index";
 
 const execFileAsync = promisify(execFile);
-const GIT_TEST_TIMEOUT_MS = 15_000;
+const GIT_TEST_TIMEOUT_MS = 30_000;
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -421,6 +432,486 @@ describe("@scaflow/workspace", () => {
     ).toBe("scaflow/SFL-017/run-readwrite-control-scope/control");
   }, GIT_TEST_TIMEOUT_MS);
 
+  it("assembles deterministic TaskRun context with task, knowledge, repositories, commands, and failure summary", async () => {
+    const fixture = await createProjectFixture();
+    const control = await createRemoteFixture(fixture.rootDir, "control");
+    await rm(fixture.projectDir, { force: true, recursive: true });
+    await git(fixture.rootDir, "clone", control.remoteDir, fixture.projectDir);
+    await writeProjectKnowledge(fixture.projectDir, {
+      "AGENTS.md": "# Instructions\n",
+      "PRODUCT.md": "# Product\n",
+      "ARCHITECTURE.md": "# Architecture\n",
+      "docs/source/scaflow-v0.1.0-prd.md": "# PRD\n",
+    });
+    await bootstrapWorkspace(fixture.projectDir, fixture.manifest);
+    const contract = contextTaskContract([
+      {
+        repository: "@control",
+        access: "read-write",
+        allowed_paths: ["packages/workspace/**"],
+        forbidden_paths: [".scaflow/**"],
+      },
+      {
+        repository: "web",
+        access: "read-only",
+        forbidden_paths: ["secrets/**"],
+      },
+    ]);
+    const workspace = await prepareTaskRunWorkspace(fixture.projectDir, {
+      taskContract: contract,
+      taskRunId: "run-context",
+      manifest: fixture.manifest,
+      control: {
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+      },
+    });
+
+    const first = await assembleTaskRunContext(fixture.projectDir, {
+      taskRunWorkspace: workspace,
+      taskContract: contract,
+      projectKnowledgeFiles: ["PRODUCT.md", "AGENTS.md"],
+      previousFailureSummary: "OPENAI_API_KEY=abc123\nPrevious verification failed\n",
+    });
+    const firstManifest = await readFile(
+      join(workspace.bundleRoot, "context-manifest.json"),
+      "utf8",
+    );
+    const second = await assembleTaskRunContext(fixture.projectDir, {
+      taskRunWorkspace: workspace,
+      taskContract: contract,
+      projectKnowledgeFiles: ["PRODUCT.md", "AGENTS.md"],
+      previousFailureSummary: "OPENAI_API_KEY=abc123\nPrevious verification failed\n",
+    });
+
+    expect(second).toEqual(first);
+    await expect(
+      readFile(join(workspace.bundleRoot, "context-manifest.json"), "utf8"),
+    ).resolves.toBe(firstManifest);
+    expect(first.manifest).toMatchObject({
+      version: 1,
+      task: { id: "SFL-018", title: "Context Assembler" },
+      control: {
+        mode: "read-write",
+        declared: true,
+        worktreePath: "control",
+      },
+      files: {
+        agents: "AGENTS.md",
+        manifest: "context-manifest.json",
+        taskContract: "context/task-contract.json",
+        projectKnowledge: [
+          {
+            source: "AGENTS.md",
+            snapshot: "context/project-knowledge/00-AGENTS.md",
+          },
+          {
+            source: "PRODUCT.md",
+            snapshot: "context/project-knowledge/01-PRODUCT.md",
+          },
+        ],
+        failureSummary: "context/failure-summary.md",
+      },
+      repositories: [
+        expect.objectContaining({
+          id: "@control",
+          access: "read-write",
+          worktreePath: "control",
+          mode: "branch",
+          allowedPaths: ["packages/workspace/**"],
+          forbiddenPaths: [".scaflow/**"],
+        }),
+        expect.objectContaining({
+          id: "web",
+          access: "read-only",
+          worktreePath: "repositories/web",
+          mode: "detached",
+          allowedPaths: [],
+          forbiddenPaths: ["secrets/**"],
+        }),
+      ],
+      verificationCommands: [
+        {
+          repository: "@control",
+          executable: "pnpm",
+          args: ["--filter", "@scaflow/workspace", "test"],
+          timeout_seconds: 300,
+          required: true,
+        },
+      ],
+    });
+    await expect(
+      readFile(join(workspace.bundleRoot, "context", "task-contract.json"), "utf8"),
+    ).resolves.toContain('"id": "SFL-018"');
+    await expect(
+      readFile(join(workspace.bundleRoot, "context", "failure-summary.md"), "utf8"),
+    ).resolves.toBe(
+      "OPENAI_API_KEY=[REDACTED]\nPrevious verification failed\n",
+    );
+    const manifestJson = await readFile(
+      join(workspace.bundleRoot, "context-manifest.json"),
+      "utf8",
+    );
+    expect(manifestJson).not.toContain(fixture.projectDir);
+    expect(manifestJson).not.toContain(fixture.rootDir);
+    await expect(
+      readFile(join(workspace.bundleRoot, "AGENTS.md"), "utf8"),
+    ).resolves.toContain(
+      "Commands must be executed as structured executable/args definitions",
+    );
+  }, GIT_TEST_TIMEOUT_MS);
+
+  it("assembles @control undeclared context without a writable control worktree", async () => {
+    const fixture = await createProjectFixture();
+    const control = await createRemoteFixture(fixture.rootDir, "control");
+    await rm(fixture.projectDir, { force: true, recursive: true });
+    await git(fixture.rootDir, "clone", control.remoteDir, fixture.projectDir);
+    await writeProjectKnowledge(fixture.projectDir, { "AGENTS.md": "# Instructions\n" });
+    await bootstrapWorkspace(fixture.projectDir, fixture.manifest);
+
+    const contract = contextTaskContract([{ repository: "web", access: "read-only" }]);
+    const workspace = await prepareTaskRunWorkspace(fixture.projectDir, {
+      taskContract: contract,
+      taskRunId: "run-control-undeclared",
+      manifest: fixture.manifest,
+      control: {
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+      },
+    });
+    const manifest = await assembleTaskRunContext(fixture.projectDir, {
+      taskRunWorkspace: workspace,
+      taskContract: contract,
+      projectKnowledgeFiles: ["AGENTS.md"],
+    });
+
+    expect(manifest.manifest.control).toEqual({
+      mode: "undeclared",
+      declared: false,
+    });
+    expect(manifest.manifest.repositories.map((repository) => repository.id)).toEqual([
+      "@control",
+      "web",
+    ]);
+    await expect(stat(join(workspace.bundleRoot, "control"))).rejects.toThrow();
+  }, GIT_TEST_TIMEOUT_MS);
+
+  it("assembles @control read-only context without a writable control worktree", async () => {
+    const fixture = await createProjectFixture();
+    const control = await createRemoteFixture(fixture.rootDir, "control");
+    await rm(fixture.projectDir, { force: true, recursive: true });
+    await git(fixture.rootDir, "clone", control.remoteDir, fixture.projectDir);
+    await writeProjectKnowledge(fixture.projectDir, { "AGENTS.md": "# Instructions\n" });
+    await bootstrapWorkspace(fixture.projectDir, fixture.manifest);
+
+    const contract = contextTaskContract([
+      { repository: "@control", access: "read-only" },
+      { repository: "web", access: "read-only" },
+    ]);
+    const workspace = await prepareTaskRunWorkspace(fixture.projectDir, {
+      taskContract: contract,
+      taskRunId: "run-control-readonly",
+      manifest: fixture.manifest,
+      control: {
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+      },
+    });
+    const manifest = await assembleTaskRunContext(fixture.projectDir, {
+      taskRunWorkspace: workspace,
+      taskContract: contract,
+      projectKnowledgeFiles: ["AGENTS.md"],
+    });
+
+    expect(manifest.manifest.control).toEqual({
+      mode: "read-only",
+      declared: true,
+    });
+    expect(manifest.manifest.repositories[0]).toMatchObject({
+      id: "@control",
+      access: "read-only",
+    });
+    expect(manifest.manifest.repositories[0]).not.toHaveProperty(
+      "worktreePath",
+    );
+    await expect(stat(join(workspace.bundleRoot, "control"))).rejects.toThrow();
+  }, GIT_TEST_TIMEOUT_MS);
+
+  it("assembles @control read-write context by referencing the prepared control worktree", async () => {
+    const fixture = await createProjectFixture();
+    const control = await createRemoteFixture(fixture.rootDir, "control");
+    await rm(fixture.projectDir, { force: true, recursive: true });
+    await git(fixture.rootDir, "clone", control.remoteDir, fixture.projectDir);
+    await writeProjectKnowledge(fixture.projectDir, { "AGENTS.md": "# Instructions\n" });
+    await bootstrapWorkspace(fixture.projectDir, fixture.manifest);
+
+    const contract = contextTaskContract([
+      { repository: "@control", access: "read-write" },
+      { repository: "web", access: "read-only" },
+    ]);
+    const workspace = await prepareTaskRunWorkspace(fixture.projectDir, {
+      taskContract: contract,
+      taskRunId: "run-control-readwrite",
+      manifest: fixture.manifest,
+      control: {
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+      },
+    });
+    const manifest = await assembleTaskRunContext(fixture.projectDir, {
+      taskRunWorkspace: workspace,
+      taskContract: contract,
+      projectKnowledgeFiles: ["AGENTS.md"],
+    });
+
+    expect(manifest.manifest.control).toEqual({
+      mode: "read-write",
+      declared: true,
+      worktreePath: "control",
+    });
+    expect(manifest.manifest.repositories[0]).toMatchObject({
+      id: "@control",
+      access: "read-write",
+      worktreePath: "control",
+      mode: "branch",
+    });
+  }, GIT_TEST_TIMEOUT_MS);
+
+  it("excludes secrets, other TaskRuns, .scaflow/state.db, unrelated source, and user-home-like paths", async () => {
+    const fixture = await createProjectFixture();
+    const control = await createRemoteFixture(fixture.rootDir, "control");
+    await rm(fixture.projectDir, { force: true, recursive: true });
+    await git(fixture.rootDir, "clone", control.remoteDir, fixture.projectDir);
+    await writeProjectKnowledge(fixture.projectDir, {
+      "AGENTS.md": "# Instructions\n",
+      "docs/source/context.md": "# Context\n",
+      "docs/source/secrets.md": "# Secret file path\n",
+      "packages/workspace/src/unrelated.ts": "const unrelated = 'source';\n",
+    });
+    const outsideHome = join(fixture.rootDir, "home", ".ssh", "id_rsa");
+    await mkdir(join(outsideHome, ".."), { recursive: true });
+    await writeFile(outsideHome, "HOME_SECRET\n", "utf8");
+    await bootstrapWorkspace(fixture.projectDir, fixture.manifest);
+    const contract = contextTaskContract([{ repository: "web", access: "read-only" }]);
+    const workspace = await prepareTaskRunWorkspace(fixture.projectDir, {
+      taskContract: contract,
+      taskRunId: "run-exclusions",
+      manifest: fixture.manifest,
+      control: {
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+      },
+    });
+    await writeProjectKnowledge(fixture.projectDir, {
+      ".scaflow/state.db": "STATE_SECRET\n",
+      "workspace/repos/web/UNRELATED.md": "UNRELATED_SOURCE\n",
+      "workspace/runs/OTHER/RUN/secret.txt": "OTHER_TASKRUN_SECRET\n",
+    });
+
+    const manifest = await assembleTaskRunContext(fixture.projectDir, {
+      taskRunWorkspace: workspace,
+      taskContract: contract,
+      projectKnowledgeFiles: ["AGENTS.md", "docs/source/context.md"],
+    });
+
+    expect(
+      manifest.manifest.files.projectKnowledge.map((entry) => entry.source),
+    ).toEqual(["AGENTS.md", "docs/source/context.md"]);
+
+    await expect(
+      assembleTaskRunContext(fixture.projectDir, {
+        taskRunWorkspace: workspace,
+        taskContract: contract,
+        projectKnowledgeFiles: [".scaflow/state.db"],
+      }),
+    ).rejects.toThrow("Project knowledge source is excluded");
+    await expect(
+      assembleTaskRunContext(fixture.projectDir, {
+        taskRunWorkspace: workspace,
+        taskContract: contract,
+        projectKnowledgeFiles: ["workspace/repos/web/UNRELATED.md"],
+      }),
+    ).rejects.toThrow("Project knowledge source is excluded");
+    await expect(
+      assembleTaskRunContext(fixture.projectDir, {
+        taskRunWorkspace: workspace,
+        taskContract: contract,
+        projectKnowledgeFiles: ["workspace/runs/OTHER/RUN/secret.txt"],
+      }),
+    ).rejects.toThrow("Project knowledge source is excluded");
+    await expect(
+      assembleTaskRunContext(fixture.projectDir, {
+        taskRunWorkspace: workspace,
+        taskContract: contract,
+        projectKnowledgeFiles: ["packages/workspace/src/unrelated.ts"],
+      }),
+    ).rejects.toThrow("Project knowledge source is unrelated");
+    await expect(
+      assembleTaskRunContext(fixture.projectDir, {
+        taskRunWorkspace: workspace,
+        taskContract: contract,
+        projectKnowledgeFiles: ["docs/source/secrets.md"],
+      }),
+    ).rejects.toThrow("Project knowledge source looks secret-bearing");
+    await expect(
+      assembleTaskRunContext(fixture.projectDir, {
+        taskRunWorkspace: workspace,
+        taskContract: contract,
+        projectKnowledgeFiles: [outsideHome],
+      }),
+    ).rejects.toThrow("Project knowledge path must be relative and safe");
+  }, GIT_TEST_TIMEOUT_MS);
+
+  it("removes stale generated knowledge snapshots and failure summaries on reassembly", async () => {
+    const fixture = await createProjectFixture();
+    const control = await createRemoteFixture(fixture.rootDir, "control");
+    await rm(fixture.projectDir, { force: true, recursive: true });
+    await git(fixture.rootDir, "clone", control.remoteDir, fixture.projectDir);
+    await writeProjectKnowledge(fixture.projectDir, {
+      "AGENTS.md": "# Instructions\n",
+      "PRODUCT.md": "# Product\n",
+    });
+    await bootstrapWorkspace(fixture.projectDir, fixture.manifest);
+    const contract = contextTaskContract([{ repository: "web", access: "read-only" }]);
+    const workspace = await prepareTaskRunWorkspace(fixture.projectDir, {
+      taskContract: contract,
+      taskRunId: "run-stale-context",
+      manifest: fixture.manifest,
+      control: {
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+      },
+    });
+
+    const first = await assembleTaskRunContext(fixture.projectDir, {
+      taskRunWorkspace: workspace,
+      taskContract: contract,
+      projectKnowledgeFiles: ["AGENTS.md", "PRODUCT.md"],
+      previousFailureSummary: "Previous failure\n",
+    });
+    expect(first.manifest.files.projectKnowledge).toHaveLength(2);
+    await expect(
+      readFile(
+        join(workspace.bundleRoot, "context", "project-knowledge", "01-PRODUCT.md"),
+        "utf8",
+      ),
+    ).resolves.toBe("# Product\n");
+    await expect(
+      readFile(join(workspace.bundleRoot, "context", "failure-summary.md"), "utf8"),
+    ).resolves.toBe("Previous failure\n");
+
+    const second = await assembleTaskRunContext(fixture.projectDir, {
+      taskRunWorkspace: workspace,
+      taskContract: contract,
+      projectKnowledgeFiles: ["AGENTS.md"],
+    });
+
+    expect(second.manifest.files.projectKnowledge).toEqual([
+      {
+        source: "AGENTS.md",
+        snapshot: "context/project-knowledge/00-AGENTS.md",
+      },
+    ]);
+    expect(second.manifest.files).not.toHaveProperty("failureSummary");
+    await expect(
+      readFile(
+        join(workspace.bundleRoot, "context", "project-knowledge", "01-PRODUCT.md"),
+        "utf8",
+      ),
+    ).rejects.toThrow();
+    await expect(
+      readFile(join(workspace.bundleRoot, "context", "failure-summary.md"), "utf8"),
+    ).rejects.toThrow();
+  }, GIT_TEST_TIMEOUT_MS);
+
+  it("rejects allowed-looking project knowledge symlinks that escape canonical boundaries", async () => {
+    const fixture = await createProjectFixture();
+    const control = await createRemoteFixture(fixture.rootDir, "control");
+    await rm(fixture.projectDir, { force: true, recursive: true });
+    await git(fixture.rootDir, "clone", control.remoteDir, fixture.projectDir);
+    await writeProjectKnowledge(fixture.projectDir, {
+      "AGENTS.md": "# Instructions\n",
+      ".scaflow/state.db": "STATE_SECRET\n",
+      ".env": "OPENAI_API_KEY=SECRET\n",
+      "packages/workspace/src/unrelated.ts": "const unrelated = 'source';\n",
+    });
+    const outsideHome = join(fixture.rootDir, "home", "notes.md");
+    await mkdir(join(outsideHome, ".."), { recursive: true });
+    await writeFile(outsideHome, "HOME_SECRET\n");
+    await bootstrapWorkspace(fixture.projectDir, fixture.manifest);
+    await writeProjectKnowledge(fixture.projectDir, {
+      "workspace/runs/OTHER/RUN/README.md": "OTHER_TASKRUN\n",
+    });
+    await mkdir(join(fixture.projectDir, "docs"), { recursive: true });
+    await symlink(outsideHome, join(fixture.projectDir, "docs", "home.md"));
+    await symlink(
+      join(fixture.projectDir, ".scaflow", "state.db"),
+      join(fixture.projectDir, "docs", "state.md"),
+    );
+    await symlink(
+      join(fixture.projectDir, "workspace", "repos", "web", "README.md"),
+      join(fixture.projectDir, "docs", "repo.md"),
+    );
+    await symlink(
+      join(fixture.projectDir, "workspace", "runs", "OTHER", "RUN", "README.md"),
+      join(fixture.projectDir, "docs", "other-run.md"),
+    );
+    await symlink(
+      join(fixture.projectDir, "packages", "workspace", "src", "unrelated.ts"),
+      join(fixture.projectDir, "docs", "source.md"),
+    );
+    await mkdir(join(fixture.projectDir, "tasks", "SFL-018"), { recursive: true });
+    await symlink(
+      join(fixture.projectDir, ".env"),
+      join(fixture.projectDir, "tasks", "SFL-018", "safe-name.md"),
+    );
+    const contract = contextTaskContract([{ repository: "web", access: "read-only" }]);
+    const workspace = await prepareTaskRunWorkspace(fixture.projectDir, {
+      taskContract: contract,
+      taskRunId: "run-symlink-exclusions",
+      manifest: fixture.manifest,
+      control: {
+        expectedUrl: control.remoteDir,
+        defaultBranch: "main",
+      },
+    });
+
+    for (const source of [
+      "docs/home.md",
+      "docs/state.md",
+      "docs/repo.md",
+      "docs/other-run.md",
+    ]) {
+      await expect(
+        assembleTaskRunContext(fixture.projectDir, {
+          taskRunWorkspace: workspace,
+          taskContract: contract,
+          projectKnowledgeFiles: [source],
+        }),
+      ).rejects.toThrow("Project knowledge source is excluded");
+    }
+    await expect(
+      assembleTaskRunContext(fixture.projectDir, {
+        taskRunWorkspace: workspace,
+        taskContract: contract,
+        projectKnowledgeFiles: ["docs/source.md"],
+      }),
+    ).rejects.toThrow("Project knowledge source is unrelated");
+    await expect(
+      assembleTaskRunContext(fixture.projectDir, {
+        taskRunWorkspace: workspace,
+        taskContract: contract,
+        projectKnowledgeFiles: ["tasks/SFL-018/safe-name.md"],
+      }),
+    ).rejects.toThrow("Project knowledge source looks secret-bearing");
+    await expect(
+      readdir(join(workspace.bundleRoot, "context", "project-knowledge")),
+    ).resolves.toEqual([]);
+    await expect(
+      readFile(join(workspace.bundleRoot, "context-manifest.json"), "utf8"),
+    ).rejects.toThrow();
+  }, GIT_TEST_TIMEOUT_MS);
+
   it("reuses the stored Revision Set when base checkouts move after prepare", async () => {
     const fixture = await createProjectFixture();
     const control = await createRemoteFixture(fixture.rootDir, "control");
@@ -658,6 +1149,56 @@ function taskContract(
       scopes,
     },
   };
+}
+
+function contextTaskContract(
+  scopes: readonly TaskRepositoryScopeLike[],
+): TaskContractLike {
+  const commandRepository = scopes.some((scope) => scope.repository === "@control")
+    ? "@control"
+    : scopes[0]?.repository ?? "web";
+  return {
+    task: {
+      id: "SFL-018",
+      title: "Context Assembler",
+      definition_state: "ready",
+    },
+    objective: {
+      summary: "Assemble TaskRun context.",
+    },
+    source_requirements: [
+      {
+        id: "FR-007",
+        document: "docs/source/scaflow-v0.1.0-prd.md",
+      },
+    ],
+    repositories: {
+      primary: scopes[0]?.repository ?? "web",
+      scopes,
+    },
+    verification: {
+      commands: [
+        {
+          repository: commandRepository,
+          executable: "pnpm",
+          args: ["--filter", "@scaflow/workspace", "test"],
+          timeout_seconds: 300,
+          required: true,
+        },
+      ],
+    },
+  };
+}
+
+async function writeProjectKnowledge(
+  projectDir: string,
+  files: Record<string, string>,
+): Promise<void> {
+  for (const [path, contents] of Object.entries(files)) {
+    const target = join(projectDir, path);
+    await mkdir(join(target, ".."), { recursive: true });
+    await writeFile(target, contents);
+  }
 }
 
 async function createProjectFixture(): Promise<{
