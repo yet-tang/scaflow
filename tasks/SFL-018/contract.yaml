@@ -4,7 +4,7 @@ task:
   title: Context Assembler
   type: workspace
   risk_level: R3
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Assemble TaskRun AGENTS.md, context manifest, knowledge snapshots, and @control behavior without exposing secrets or unrelated source.
 source_requirements:
