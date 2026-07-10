@@ -18,13 +18,14 @@ dependencies:
   - SFL-020
   - SFL-023
   - SFL-032
-dependency_changes: forbidden
+dependency_changes: allowed
 repositories:
   primary: "@control"
   scopes:
     - repository: "@control"
       access: read-write
       allowed_paths:
+        - pnpm-lock.yaml
         - packages/codex-runtime/**
         - packages/config/**
         - packages/core/**
@@ -43,9 +44,14 @@ acceptance_criteria:
   - id: SFL-033-AC-03
     description: Agent command network is disabled by default unless allowed by policy.
   - id: SFL-033-AC-04
-    description: Security violations terminate the TaskRun and record non-repairable evidence.
+    description: Security violations terminate the runtime session and are emitted and classified as non-repairable evidence for the orchestrator to persist and transition safely.
 verification:
   commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["install", "--frozen-lockfile"]
+      timeout_seconds: 900
+      required: true
     - repository: "@control"
       executable: pnpm
       args: ["--filter", "@scaflow/codex-runtime", "test"]
@@ -54,6 +60,11 @@ verification:
     - repository: "@control"
       executable: pnpm
       args: ["--filter", "@scaflow/verification", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/config", "test"]
       timeout_seconds: 300
       required: true
     - repository: "@control"

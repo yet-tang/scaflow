@@ -15,13 +15,14 @@ source_requirements:
 dependencies:
   - SFL-003
   - SFL-018
-dependency_changes: forbidden
+dependency_changes: allowed
 repositories:
   primary: "@control"
   scopes:
     - repository: "@control"
       access: read-write
       allowed_paths:
+        - pnpm-lock.yaml
         - packages/codex-runtime/**
         - packages/schemas/**
         - packages/testkit/**
@@ -33,11 +34,16 @@ acceptance_criteria:
   - id: SFL-019-AC-01
     description: Runtime contract supports working directory, session ID, streaming events, final Agent Result, continue, cancel, and timeout.
   - id: SFL-019-AC-02
-    description: Agent Result schema is exported from @scaflow/schemas.
+    description: A strict Agent Result schema and inferred type covering status, summary, changed files, commands run, acceptance mapping, known limitations, decision requests, and detected risks are exported from @scaflow/schemas.
   - id: SFL-019-AC-03
     description: Mock Runtime can drive deterministic tests without network or credentials.
 verification:
   commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["install", "--frozen-lockfile"]
+      timeout_seconds: 900
+      required: true
     - repository: "@control"
       executable: pnpm
       args: ["--filter", "@scaflow/codex-runtime", "test"]

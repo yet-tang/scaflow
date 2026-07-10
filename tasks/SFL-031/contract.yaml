@@ -12,7 +12,13 @@ source_requirements:
     document: docs/source/scaflow-v0.1.0-prd.md
   - id: G-003
     document: docs/source/scaflow-v0.1.0-prd.md
+  - id: G-004
+    document: docs/source/scaflow-v0.1.0-prd.md
   - id: G-005
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: G-006
+    document: docs/source/scaflow-v0.1.0-prd.md
+  - id: G-007
     document: docs/source/scaflow-v0.1.0-prd.md
 source_references:
   - document: docs/source/scaflow-v0.1.0-prd.md
@@ -23,13 +29,14 @@ dependencies:
   - SFL-020
   - SFL-030
   - SFL-034
-dependency_changes: forbidden
+dependency_changes: allowed
 repositories:
   primary: "@control"
   scopes:
     - repository: "@control"
       access: read-write
       allowed_paths:
+        - pnpm-lock.yaml
         - fixtures/**
         - packages/testkit/**
         - packages/core/**
@@ -50,6 +57,21 @@ acceptance_criteria:
     description: Optional live Codex smoke test is separate and manual.
 verification:
   commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["install", "--frozen-lockfile"]
+      timeout_seconds: 900
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/cli", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/testkit", "test"]
+      timeout_seconds: 300
+      required: true
     - repository: "@control"
       executable: pnpm
       args: ["test"]

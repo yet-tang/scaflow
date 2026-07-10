@@ -34,8 +34,15 @@ acceptance_criteria:
     description: Regular pnpm test does not require Codex credentials, network, or a live service.
   - id: SFL-020-AC-03
     description: Live smoke tests are available only through an explicit test:live command.
+  - id: SFL-020-AC-04
+    description: SDK and exec adapter logs and structured errors are redacted before persistence or display and do not expose secrets.
 verification:
   commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["install", "--frozen-lockfile"]
+      timeout_seconds: 900
+      required: true
     - repository: "@control"
       executable: pnpm
       args: ["--filter", "@scaflow/codex-runtime", "test"]

@@ -12,13 +12,14 @@ source_requirements:
     document: docs/source/scaflow-v0.1.0-prd.md
 dependencies:
   - SFL-027
-dependency_changes: forbidden
+dependency_changes: allowed
 repositories:
   primary: "@control"
   scopes:
     - repository: "@control"
       access: read-write
       allowed_paths:
+        - pnpm-lock.yaml
         - packages/changeset/**
         - packages/schemas/**
         - packages/state/**
@@ -32,11 +33,18 @@ acceptance_criteria:
   - id: SFL-028-AC-01
     description: ChangeSet records Task ID, TaskRun ID, base commits, result commits, changed files, verification result, merge order, and state.
   - id: SFL-028-AC-02
-    description: Manifest is written to .scaflow/evidence/changesets first and synchronized to changesets/ only when @control is read-write.
+    description: Manifest is written to .scaflow/evidence/changesets first and synchronized to changesets/ only when @control is read-write; otherwise pending_control_update is recorded without mutating @control.
   - id: SFL-028-AC-03
     description: ChangeSet docs and output explicitly do not claim cross-repository atomicity.
+  - id: SFL-028-AC-04
+    description: scaflow changeset show and scaflow changeset list expose persisted ChangeSet state and manifest evidence without mutating it.
 verification:
   commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["install", "--frozen-lockfile"]
+      timeout_seconds: 900
+      required: true
     - repository: "@control"
       executable: pnpm
       args: ["--filter", "@scaflow/changeset", "test"]
@@ -45,6 +53,16 @@ verification:
     - repository: "@control"
       executable: pnpm
       args: ["--filter", "@scaflow/cli", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/schemas", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/state", "test"]
       timeout_seconds: 300
       required: true
     - repository: "@control"

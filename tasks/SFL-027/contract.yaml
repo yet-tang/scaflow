@@ -10,15 +10,18 @@ objective:
 source_requirements:
   - id: FR-015
     document: docs/source/scaflow-v0.1.0-prd.md
+  - id: NFR-002
+    document: docs/source/scaflow-v0.1.0-prd.md
 dependencies:
   - SFL-026
-dependency_changes: forbidden
+dependency_changes: allowed
 repositories:
   primary: "@control"
   scopes:
     - repository: "@control"
       access: read-write
       allowed_paths:
+        - pnpm-lock.yaml
         - packages/git/**
         - packages/core/**
         - packages/state/**
@@ -34,8 +37,15 @@ acceptance_criteria:
     description: Commit messages include Task ID, TaskRun ID, Requirement IDs, and Acceptance Criterion IDs.
   - id: SFL-027-AC-03
     description: The implementation does not push, open PRs, merge, or release.
+  - id: SFL-027-AC-04
+    description: Commit generation checks the current TaskRun and repository commit state, and a repeated invocation does not create a duplicate commit.
 verification:
   commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["install", "--frozen-lockfile"]
+      timeout_seconds: 900
+      required: true
     - repository: "@control"
       executable: pnpm
       args: ["--filter", "@scaflow/git", "test"]
@@ -44,6 +54,11 @@ verification:
     - repository: "@control"
       executable: pnpm
       args: ["--filter", "@scaflow/core", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/state", "test"]
       timeout_seconds: 300
       required: true
     - repository: "@control"

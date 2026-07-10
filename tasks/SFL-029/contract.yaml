@@ -6,7 +6,7 @@ task:
   risk_level: R3
   definition_state: ready
 objective:
-  summary: Recover or safely orphan non-terminal TaskRuns on engine startup and implement run inspect/status.
+  summary: Recover or safely orphan non-terminal TaskRuns on engine startup and implement run inspect and task status.
 source_requirements:
   - id: FR-017
     document: docs/source/scaflow-v0.1.0-prd.md
@@ -39,7 +39,7 @@ acceptance_criteria:
   - id: SFL-029-AC-02
     description: Runs with missing process/session/workspace are marked orphaned without deleting logs or evidence.
   - id: SFL-029-AC-03
-    description: run inspect/status surfaces TaskRun, session, verification, ChangeSet, and evidence details.
+    description: run inspect and task status surface TaskRun, session, verification, ChangeSet, and evidence details.
 verification:
   commands:
     - repository: "@control"
@@ -50,6 +50,11 @@ verification:
     - repository: "@control"
       executable: pnpm
       args: ["--filter", "@scaflow/core", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/cli", "test"]
       timeout_seconds: 300
       required: true
     - repository: "@control"

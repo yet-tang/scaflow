@@ -31,7 +31,7 @@ acceptance_criteria:
   - id: SFL-030-AC-01
     description: run clean refuses to clean running TaskRuns.
   - id: SFL-030-AC-02
-    description: run clean does not silently delete TaskRuns with uncommitted diffs.
+    description: run clean refuses a TaskRun with uncommitted diffs unless an explicit --force acknowledgement is supplied, and forced cleanup persists diff evidence before deletion.
   - id: SFL-030-AC-03
     description: cleanup saves diff, logs, and evidence before deleting TaskRun workspace data.
   - id: SFL-030-AC-04
@@ -46,6 +46,11 @@ verification:
     - repository: "@control"
       executable: pnpm
       args: ["--filter", "@scaflow/cli", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/state", "test"]
       timeout_seconds: 300
       required: true
     - repository: "@control"

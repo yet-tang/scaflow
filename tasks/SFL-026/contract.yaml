@@ -15,18 +15,18 @@ dependencies:
   - SFL-022
   - SFL-024
   - SFL-025
-dependency_changes: forbidden
+dependency_changes: allowed
 repositories:
   primary: "@control"
   scopes:
     - repository: "@control"
       access: read-write
       allowed_paths:
+        - pnpm-lock.yaml
         - packages/core/**
         - packages/codex-runtime/**
         - packages/verification/**
         - packages/state/**
-        - apps/cli/**
         - fixtures/**
       forbidden_paths:
         - docs/source/scaflow-v0.1.0-prd.md
@@ -36,11 +36,16 @@ acceptance_criteria:
   - id: SFL-026-AC-01
     description: Default retry policy uses max_attempts 2, max_repair_rounds_per_attempt 3, and escalate_after_same_failure 2.
   - id: SFL-026-AC-02
-    description: Non-repairable failures are not sent back to Agent and transition to blocked or failed.
+    description: Repository identity mismatch, unauthorized repository changes, protected control mutations, secret exposure, invalid Task Contracts, and workspace corruption are non-repairable, are not sent back to the Agent, and transition to blocked or failed.
   - id: SFL-026-AC-03
     description: Repair loop continues the same session when recoverable and re-runs verification after repair.
 verification:
   commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["install", "--frozen-lockfile"]
+      timeout_seconds: 900
+      required: true
     - repository: "@control"
       executable: pnpm
       args: ["--filter", "@scaflow/core", "test"]
@@ -49,6 +54,16 @@ verification:
     - repository: "@control"
       executable: pnpm
       args: ["--filter", "@scaflow/verification", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/codex-runtime", "test"]
+      timeout_seconds: 300
+      required: true
+    - repository: "@control"
+      executable: pnpm
+      args: ["--filter", "@scaflow/state", "test"]
       timeout_seconds: 300
       required: true
     - repository: "@control"

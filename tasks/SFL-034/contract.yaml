@@ -27,13 +27,14 @@ dependencies:
   - SFL-026
   - SFL-028
   - SFL-033
-dependency_changes: forbidden
+dependency_changes: allowed
 repositories:
   primary: "@control"
   scopes:
     - repository: "@control"
       access: read-write
       allowed_paths:
+        - pnpm-lock.yaml
         - apps/cli/**
         - packages/core/**
         - packages/codex-runtime/**
@@ -58,6 +59,11 @@ acceptance_criteria:
     description: Orchestrator never treats TaskRun succeeded as Task completed.
 verification:
   commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["install", "--frozen-lockfile"]
+      timeout_seconds: 900
+      required: true
     - repository: "@control"
       executable: pnpm
       args: ["--filter", "@scaflow/core", "test"]

@@ -2,7 +2,7 @@ version: 1
 task:
   id: SFL-032
   title: Security Policy Schema and Loader
-  type: schema
+  type: control-plane-change
   risk_level: R3
   definition_state: ready
 objective:
@@ -17,13 +17,14 @@ source_requirements:
 dependencies:
   - SFL-003
   - SFL-008
-dependency_changes: forbidden
+dependency_changes: allowed
 repositories:
   primary: "@control"
   scopes:
     - repository: "@control"
       access: read-write
       allowed_paths:
+        - pnpm-lock.yaml
         - packages/schemas/**
         - packages/config/**
         - templates/default-project-scaflow/policies/**
@@ -36,11 +37,16 @@ acceptance_criteria:
   - id: SFL-032-AC-01
     description: policies/security.yaml and policies/command-policy.yaml schemas define protected paths, writable roots, network defaults, Docker socket visibility, shell policy, and control-plane protection.
   - id: SFL-032-AC-02
-    description: Security policy loading fails closed when required policy files are invalid or missing after project initialization.
+    description: After project initialization, project-local policy files are authoritative; missing or invalid required files fail closed, and loading does not fall back to user-home or environment policy files.
   - id: SFL-032-AC-03
     description: control-plane-change is required for protected policy, workflow, schema, engine version, release permission, and approval record edits.
 verification:
   commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["install", "--frozen-lockfile"]
+      timeout_seconds: 900
+      required: true
     - repository: "@control"
       executable: pnpm
       args: ["--filter", "@scaflow/schemas", "test"]

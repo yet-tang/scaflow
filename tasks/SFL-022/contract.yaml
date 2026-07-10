@@ -13,13 +13,14 @@ source_requirements:
 dependencies:
   - SFL-016
   - SFL-021
-dependency_changes: forbidden
+dependency_changes: allowed
 repositories:
   primary: "@control"
   scopes:
     - repository: "@control"
       access: read-write
       allowed_paths:
+        - pnpm-lock.yaml
         - packages/verification/**
         - packages/git/**
         - packages/schemas/**
@@ -30,13 +31,18 @@ repositories:
         - .scaflow/state.db
 acceptance_criteria:
   - id: SFL-022-AC-01
-    description: Unauthorized repository, read-only repository, unauthorized path, and protected control file diffs fail immediately.
+    description: Unauthorized repository, read-only repository, unauthorized path, protected control file, and other TaskRun diffs fail immediately.
   - id: SFL-022-AC-02
     description: Repository identity mismatch fails immediately and is not auto-repairable.
   - id: SFL-022-AC-03
     description: Scope verifier never treats workspace/repos as a formal TaskRun write target.
 verification:
   commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["install", "--frozen-lockfile"]
+      timeout_seconds: 900
+      required: true
     - repository: "@control"
       executable: pnpm
       args: ["--filter", "@scaflow/verification", "test"]

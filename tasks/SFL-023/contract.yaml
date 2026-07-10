@@ -15,13 +15,14 @@ source_requirements:
 dependencies:
   - SFL-002
   - SFL-021
-dependency_changes: forbidden
+dependency_changes: allowed
 repositories:
   primary: "@control"
   scopes:
     - repository: "@control"
       access: read-write
       allowed_paths:
+        - pnpm-lock.yaml
         - packages/verification/**
         - packages/core/**
         - packages/testkit/**
@@ -35,11 +36,16 @@ acceptance_criteria:
   - id: SFL-023-AC-02
     description: Timeout terminates the process and records a structured failure.
   - id: SFL-023-AC-03
-    description: Environment variables are allowlisted and stdout/stderr are truncated with full artifacts saved.
+    description: Environment variables are allowlisted, exit codes are recorded, and stdout/stderr are truncated with full artifacts saved.
   - id: SFL-023-AC-04
-    description: Arbitrary shell strings are rejected unless explicit shell policy allows them.
+    description: Arbitrary shell strings are rejected by default and may be accepted only when the caller supplies an explicit prevalidated shell-policy decision; policy schema and loading remain out of scope until SFL-032.
 verification:
   commands:
+    - repository: "@control"
+      executable: pnpm
+      args: ["install", "--frozen-lockfile"]
+      timeout_seconds: 900
+      required: true
     - repository: "@control"
       executable: pnpm
       args: ["--filter", "@scaflow/verification", "test"]
