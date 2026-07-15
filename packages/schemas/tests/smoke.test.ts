@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   SchemaParseError,
+  agentResultSchema,
   changeSetStateSchema,
   packageName,
   parseSchema,
@@ -34,6 +35,44 @@ async function readProjectFixture(name: string): Promise<unknown> {
 }
 
 describe("@scaflow/schemas", () => {
+  it("validates a strict Agent Result and rejects malformed nested claims", () => {
+    const result = {
+      status: "succeeded",
+      summary: "Implemented the runtime contract.",
+      changed_files: ["packages/codex-runtime/src/index.ts"],
+      commands_run: [{ executable: "pnpm", args: ["test"], exit_code: 0 }],
+      acceptance_mapping: [
+        {
+          acceptance_criterion_id: "SFL-019-AC-01",
+          evidence: ["runtime tests"],
+          satisfied: true,
+        },
+      ],
+      known_limitations: [],
+      decision_requests: [],
+      risks_detected: [],
+    } as const;
+
+    expect(agentResultSchema.parse(result)).toEqual(result);
+    expect(
+      agentResultSchema.safeParse({
+        ...result,
+        commands_run: [{ executable: "pnpm", args: "test", exit_code: 0 }],
+      }).success,
+    ).toBe(false);
+    expect(
+      agentResultSchema.safeParse({ ...result, untrusted: true }).success,
+    ).toBe(false);
+    expect(
+      agentResultSchema.safeParse({
+        ...result,
+        risks_detected: [
+          { description: "secret value", severity: "unknown", extra: true },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
   it("exposes package identity", () => {
     expect(packageName).toBe("@scaflow/schemas");
   });

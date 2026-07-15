@@ -6,10 +6,13 @@
   "exports": {
     ".": "./dist/index.js"
   },
+  "dependencies": {
+    "@scaflow/schemas": "workspace:*"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run tests/smoke.test.ts",
+    "test": "vitest run tests/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   }
 }

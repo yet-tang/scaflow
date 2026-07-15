@@ -29,7 +29,11 @@ importers:
 
   packages/changeset: {}
 
-  packages/codex-runtime: {}
+  packages/codex-runtime:
+    dependencies:
+      '@scaflow/schemas':
+        specifier: workspace:*
+        version: link:../schemas
 
   packages/config: {}
 

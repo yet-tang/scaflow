@@ -1,6 +1,21 @@
 export const packageName = "@scaflow/schemas";
 
 export {
+  agentResultAcceptanceMappingSchema,
+  agentResultCommandSchema,
+  agentResultDecisionRequestSchema,
+  agentResultRiskSchema,
+  agentResultSchema,
+  agentResultStatuses,
+  type AgentResult,
+  type AgentResultAcceptanceMapping,
+  type AgentResultCommand,
+  type AgentResultDecisionRequest,
+  type AgentResultRisk,
+  type AgentResultStatus,
+} from "./agent-result.js";
+
+export {
   changeSetStateSchema,
   changeSetStates,
   taskDefinitionStateSchema,
