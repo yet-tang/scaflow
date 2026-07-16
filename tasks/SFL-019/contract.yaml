@@ -4,7 +4,7 @@ task:
   title: Agent Runtime Contract and Mock
   type: runtime
   risk_level: R2
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Define the Agent Runtime contract, Agent Result schema, streaming events, sessions, timeout behavior, and Mock Runtime.
 source_requirements:
