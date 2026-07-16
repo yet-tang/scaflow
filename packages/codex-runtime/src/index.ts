@@ -2,6 +2,21 @@ import type { AgentResult } from "@scaflow/schemas";
 
 export const packageName = "@scaflow/codex-runtime";
 
+export {
+  CodexSdkAgentRuntime,
+  type CodexSdkAgentRuntimeOptions,
+  type CodexSdkClient,
+  type CodexSdkClientFactory,
+  type CodexSdkThread,
+} from "./sdk-adapter.js";
+export {
+  CodexExecAgentRuntime,
+  type CodexExecAgentRuntimeOptions,
+  type CodexExecProcess,
+  type CodexExecSpawner,
+  type CodexExecSpawnRequest,
+} from "./exec-adapter.js";
+
 export type AgentRuntimeEvent =
   | { readonly sequence: number; readonly type: "session_started"; readonly sessionId: string }
   | { readonly sequence: number; readonly type: "message"; readonly message: string }
