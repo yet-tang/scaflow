@@ -4,7 +4,7 @@ task:
   title: Codex SDK and Exec Adapters
   type: runtime
   risk_level: R3
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Implement real Codex adapters for @openai/codex-sdk and codex exec while keeping regular tests fully mock-based.
 source_requirements:
