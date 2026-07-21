@@ -4,7 +4,7 @@ task:
   title: Verification Framework
   type: verification
   risk_level: R2
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Build the verification run framework, result schema, failure classification, and artifact foundation.
 source_requirements:
