@@ -1,6 +1,7 @@
 import sqlite3 from "node-sqlite3-wasm";
 
 import { eventLogMigration } from "./event-log.js";
+import { verificationRunsMigration } from "./verification-runs.js";
 
 const { Database } = sqlite3;
 
@@ -46,6 +47,15 @@ export {
   type RuntimeStateRecord,
   type TransitionRuntimeStateInput,
 } from "./event-log.js";
+export {
+  completeVerificationRun,
+  createVerificationRun,
+  getVerificationRun,
+  listVerificationRuns,
+  verificationRunsMigration,
+  type CompleteVerificationRunInput,
+  type CreateVerificationRunInput,
+} from "./verification-runs.js";
 
 const migrationTableName = "_scaflow_schema_migrations";
 
@@ -103,6 +113,7 @@ export class StateStore {
   ) {
     this.#migrations = validateMigrations([
       eventLogMigration,
+      verificationRunsMigration,
       ...(options.migrations ?? []),
     ]);
     this.#database = new Database(databasePath);

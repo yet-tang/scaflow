@@ -11,5 +11,8 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run tests/smoke.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@scaflow/schemas": "workspace:*"
   }
 }

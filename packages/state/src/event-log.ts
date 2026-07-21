@@ -147,15 +147,22 @@ export function recordAuditEvent(
   store: StateStore,
   input: AuditEventInput,
 ): AuditEventRecord {
+  return store.transaction(({ repository }) =>
+    appendAuditEvent(repository((context) => context), input),
+  );
+}
+
+export function appendAuditEvent(
+  context: RepositoryContext,
+  input: AuditEventInput,
+): AuditEventRecord {
   if (input.type.startsWith(stateTransitionEventPrefix)) {
     throw new TypeError(
       "State transition events must be recorded through runtime state APIs",
     );
   }
   const event = prepareAuditEvent(input);
-  return store.transaction(({ repository }) =>
-    repository(auditEventRepository).append(event),
-  );
+  return auditEventRepository(context).append(event);
 }
 
 export function listAuditEvents(

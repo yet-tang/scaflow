@@ -64,5 +64,27 @@ export {
   type TaskContractRepositoryScope,
   type TaskContractVerificationCommand,
 } from "./task-contract.js";
+export {
+  verificationArtifactReferenceSchema,
+  verificationFailureCategories,
+  verificationFailureSchema,
+  verificationRepairabilities,
+  verificationResultSchema,
+  verificationResultStatuses,
+  verificationRunSchema,
+  verificationRunStatuses,
+  verifierResultSchema,
+  verifierResultStatuses,
+  type VerificationArtifactReference,
+  type VerificationFailure,
+  type VerificationFailureCategory,
+  type VerificationRepairability,
+  type VerificationResult,
+  type VerificationResultStatus,
+  type VerificationRun,
+  type VerificationRunStatus,
+  type VerifierResult,
+  type VerifierResultStatus,
+} from "./verification-result.js";
 export { z } from "zod";
 export type { ZodType, infer as Infer } from "zod";

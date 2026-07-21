@@ -97,6 +97,7 @@ describe("@scaflow/state", () => {
         "001-create-projects",
         "002-add-name",
         "007-event-log-and-audit-trail",
+        "021-verification-runs",
       ]);
       expect(
         store.repository((context) =>

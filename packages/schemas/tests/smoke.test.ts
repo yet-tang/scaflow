@@ -16,6 +16,8 @@ import {
   taskContractSchema,
   taskDefinitionStateSchema,
   taskRunStateSchema,
+  verificationResultSchema,
+  verificationRunSchema,
   z,
   type Infer,
   type ProjectConfig,
@@ -35,6 +37,54 @@ async function readProjectFixture(name: string): Promise<unknown> {
 }
 
 describe("@scaflow/schemas", () => {
+  it("exports strict, internally consistent verification schemas", () => {
+    const failure = {
+      code: "COMMAND_FAILED",
+      category: "execution",
+      repairability: "repairable",
+      message: "The command exited with code 1",
+    } as const;
+    const verifierResult = {
+      verifier_id: "commands",
+      status: "failed",
+      summary: "A required command failed",
+      failures: [failure],
+      artifacts: [],
+    } as const;
+    const result = {
+      status: "failed",
+      verifier_results: [verifierResult],
+      artifacts: [],
+      failures: [failure],
+    } as const;
+    const run = {
+      version: 1,
+      id: "verification-1",
+      task_run_id: "task-run-1",
+      status: "failed",
+      started_at: "2026-07-17T00:00:00.000Z",
+      completed_at: "2026-07-17T00:00:01.000Z",
+      result,
+      artifacts: [],
+      failures: [failure],
+    } as const;
+
+    expect(verificationResultSchema.parse(result)).toEqual(result);
+    expect(verificationRunSchema.parse(run)).toEqual(run);
+    expect(
+      verificationResultSchema.safeParse({ ...result, status: "passed" }).success,
+    ).toBe(false);
+    expect(
+      verificationResultSchema.safeParse({ ...result, failures: [] }).success,
+    ).toBe(false);
+    expect(
+      verificationRunSchema.safeParse({ ...run, completed_at: null }).success,
+    ).toBe(false);
+    expect(
+      verificationRunSchema.safeParse({ ...run, unexpected: true }).success,
+    ).toBe(false);
+  });
+
   it("validates a strict Agent Result and rejects malformed nested claims", () => {
     const result = {
       status: "succeeded",
