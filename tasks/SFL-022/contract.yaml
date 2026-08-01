@@ -4,7 +4,7 @@ task:
   title: Scope Verifier
   type: verification
   risk_level: R3
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Verify actual Git diff against authorized repositories, access modes, allowed paths, forbidden paths, protected control files, and TaskRun isolation.
 source_requirements:
