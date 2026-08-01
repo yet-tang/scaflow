@@ -14,6 +14,7 @@ import {
   cloneRepository,
   fetchRepository,
   getCurrentBranch,
+  getRepositoryChanges,
   freezeRepositoryRevision,
   freezeRevisionSet,
   getHeadCommit,
@@ -296,6 +297,41 @@ describe("@scaflow/git", () => {
     expect(await getHeadCommit({ cwd: branchDir })).toBe(commit);
     expect(await getCurrentBranch({ cwd: branchDir })).toBe(
       "scaflow/SFL-017/run-001/web",
+    );
+  }, GIT_TEST_TIMEOUT_MS);
+
+  it("collects committed, staged, unstaged, deleted, renamed, copied, and untracked paths", async () => {
+    const fixture = await createRepositoryFixture();
+    await cloneRepository({
+      cwd: fixture.parentDir,
+      sourceUrl: fixture.remoteDir,
+      targetDir: fixture.cloneDir,
+    });
+    await git(fixture.cloneDir, "config", "user.name", "Scaflow Test");
+    await git(fixture.cloneDir, "config", "user.email", "scaflow@example.invalid");
+    const baseCommit = await getHeadCommit({ cwd: fixture.cloneDir });
+
+    await git(fixture.cloneDir, "mv", "README.md", "RENAMED.md");
+    await git(fixture.cloneDir, "commit", "-m", "Rename tracked file");
+    await writeFile(join(fixture.cloneDir, "COPIED.md"), "# fixture\n");
+    await git(fixture.cloneDir, "add", "COPIED.md");
+    await writeFile(join(fixture.cloneDir, "RENAMED.md"), "# changed in worktree\n");
+    await writeFile(join(fixture.cloneDir, "untracked.txt"), "untracked\n");
+
+    const changes = await getRepositoryChanges({ cwd: fixture.cloneDir, baseCommit });
+    expect(changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: "committed", status: "R100", originalPath: "README.md", path: "RENAMED.md" }),
+      expect.objectContaining({ source: "staged", status: "C100", originalPath: "RENAMED.md", path: "COPIED.md" }),
+      expect.objectContaining({ source: "unstaged", status: "M", path: "RENAMED.md" }),
+      expect.objectContaining({ source: "untracked", status: "?", path: "untracked.txt" }),
+    ]));
+
+    await git(fixture.cloneDir, "reset", "--hard", "HEAD");
+    await rm(join(fixture.cloneDir, "RENAMED.md"));
+    expect(await getRepositoryChanges({ cwd: fixture.cloneDir, baseCommit })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: "unstaged", status: "D", path: "RENAMED.md" }),
+      ]),
     );
   }, GIT_TEST_TIMEOUT_MS);
 

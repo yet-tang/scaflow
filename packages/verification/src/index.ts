@@ -313,3 +313,13 @@ function assertWithinRoot(root: string, candidate: string): void {
     throw new TypeError("Artifact path resolves outside the evidence directory");
   }
 }
+
+export {
+  SCOPE_VERIFIER_ID,
+  createScopeVerifier,
+  matchesPathPattern,
+  protectedControlPathPatterns,
+  type ScopePreparedWorkspace,
+  type ScopeRepositoryObservation,
+  type ScopeVerifierOptions,
+} from "./scope.js";

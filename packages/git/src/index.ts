@@ -8,6 +8,7 @@ export const packageName = "@scaflow/git";
 export type GitOperation =
   | "branch"
   | "clone"
+  | "diff"
   | "fetch"
   | "freeze-revision"
   | "head"
@@ -125,6 +126,20 @@ export interface RepositoryStatus {
   porcelain: string;
 }
 
+export type GitChangeSource = "committed" | "staged" | "unstaged" | "untracked";
+
+export interface GitChangedPath {
+  readonly source: GitChangeSource;
+  readonly status: string;
+  readonly path: string;
+  readonly originalPath?: string;
+}
+
+export interface RepositoryChangesOptions {
+  readonly cwd: string;
+  readonly baseCommit: string;
+}
+
 export type RepositoryIdentityResult =
   | {
       status: "matching";
@@ -228,6 +243,54 @@ export async function getRepositoryStatus(
     clean: porcelain.length === 0,
     porcelain,
   };
+}
+
+/**
+ * Observes every path changed since a frozen base, including committed, index,
+ * worktree, rename/copy endpoints, and untracked changes. This function is
+ * deliberately read-only and always binds Git to the supplied repository cwd.
+ */
+export async function getRepositoryChanges(
+  options: RepositoryChangesOptions,
+): Promise<readonly GitChangedPath[]> {
+  assertExplicitDirectory(options.cwd, "cwd", "diff");
+  if (!/^[0-9a-f]{40}$/.test(options.baseCommit)) {
+    throw new GitError("Git base commit must be a full lowercase SHA-1", "GIT_COMMAND_FAILED", {
+      operation: "diff",
+      cwd: options.cwd,
+      args: ["diff", options.baseCommit, "HEAD"],
+    });
+  }
+
+  const [committed, staged, unstaged, untracked] = await Promise.all([
+    runGit({
+      operation: "diff",
+      cwd: options.cwd,
+      args: ["diff", "--name-status", "-z", "--find-renames", "--find-copies-harder", options.baseCommit, "HEAD"],
+    }),
+    runGit({
+      operation: "diff",
+      cwd: options.cwd,
+      args: ["diff", "--cached", "--name-status", "-z", "--find-renames", "--find-copies-harder"],
+    }),
+    runGit({
+      operation: "diff",
+      cwd: options.cwd,
+      args: ["diff", "--name-status", "-z", "--find-renames", "--find-copies-harder"],
+    }),
+    runGit({
+      operation: "diff",
+      cwd: options.cwd,
+      args: ["ls-files", "--others", "--exclude-standard", "-z"],
+    }),
+  ]);
+
+  return [
+    ...parseNameStatus(committed.stdout, "committed"),
+    ...parseNameStatus(staged.stdout, "staged"),
+    ...parseNameStatus(unstaged.stdout, "unstaged"),
+    ...parseUntracked(untracked.stdout),
+  ];
 }
 
 export async function getHeadCommit(
@@ -646,4 +709,45 @@ function isSecretKey(key: string): boolean {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function parseNameStatus(output: string, source: Exclude<GitChangeSource, "untracked">): GitChangedPath[] {
+  if (output.length === 0) {
+    return [];
+  }
+  const fields = output.split("\0");
+  if (fields.at(-1) === "") {
+    fields.pop();
+  }
+  const changes: GitChangedPath[] = [];
+  for (let index = 0; index < fields.length;) {
+    const status = fields[index++];
+    const path = fields[index++];
+    if (status === undefined || path === undefined || status.length === 0 || path.length === 0) {
+      throw new GitError("Git returned malformed changed-path evidence", "GIT_COMMAND_FAILED", {
+        operation: "diff",
+        cause: `source=${source}`,
+      });
+    }
+    if (status.startsWith("R") || status.startsWith("C")) {
+      const destination = fields[index++];
+      if (destination === undefined || destination.length === 0) {
+        throw new GitError("Git returned malformed rename/copy evidence", "GIT_COMMAND_FAILED", {
+          operation: "diff",
+          cause: `source=${source}`,
+        });
+      }
+      changes.push({ source, status, originalPath: path, path: destination });
+    } else {
+      changes.push({ source, status, path });
+    }
+  }
+  return changes;
+}
+
+function parseUntracked(output: string): GitChangedPath[] {
+  return output
+    .split("\0")
+    .filter((path) => path.length > 0)
+    .map((path) => ({ source: "untracked", status: "?", path }));
 }
