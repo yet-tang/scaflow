@@ -4,7 +4,7 @@ task:
   title: Structured Command Runner
   type: verification
   risk_level: R3
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Execute structured commands safely with explicit repository cwd, executable/args arrays, timeout, env allowlist, truncation, artifacts, process termination, and shell policy.
 source_requirements:
