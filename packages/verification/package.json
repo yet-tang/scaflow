@@ -9,10 +9,11 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run tests/smoke.test.ts tests/scope.test.ts",
+    "test": "vitest run --no-file-parallelism tests/smoke.test.ts tests/scope.test.ts tests/command.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@scaflow/core": "workspace:*",
     "@scaflow/git": "workspace:*",
     "@scaflow/schemas": "workspace:*"
   }

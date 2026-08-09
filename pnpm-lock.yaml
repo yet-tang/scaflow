@@ -82,6 +82,9 @@ importers:
 
   packages/verification:
     dependencies:
+      '@scaflow/core':
+        specifier: workspace:*
+        version: link:../core
       '@scaflow/git':
         specifier: workspace:*
         version: link:../git

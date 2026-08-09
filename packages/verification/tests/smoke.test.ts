@@ -1,4 +1,6 @@
-import { mkdir, mkdtemp, readFile, rm, stat, symlink } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { renameSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -93,19 +95,20 @@ describe("@scaflow/verification", () => {
   it("writes portable artifact references only within an explicit evidence root", async () => {
     const root = await temporaryDirectory("scaflow-evidence-");
     const store = await VerificationArtifactStore.create(root);
+    const requestedPath = "verification/run-1/stdout.txt";
     const artifact = await store.write({
       id: "command-output",
-      path: "verification/run-1/stdout.txt",
+      path: requestedPath,
       mediaType: "text/plain",
       data: "hello\n",
     });
 
     expect(artifact).toMatchObject({
       id: "command-output",
-      path: "verification/run-1/stdout.txt",
       media_type: "text/plain",
       byte_length: 6,
     });
+    expect(artifact.path).toBe(flatArtifactPath(requestedPath));
     expect(artifact.sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(await readFile(join(root, artifact.path), "utf8")).toBe("hello\n");
     await expect(
@@ -125,7 +128,7 @@ describe("@scaflow/verification", () => {
     ).rejects.toThrow();
     await expect(readFile(join(root, "verification/invalid.txt"))).rejects.toThrow();
     await expect(
-      store.write({ id: "duplicate", path: artifact.path, mediaType: "text/plain", data: "replacement" }),
+      store.write({ id: "duplicate", path: requestedPath, mediaType: "text/plain", data: "replacement" }),
     ).rejects.toMatchObject({ code: "EEXIST" });
     expect(await readFile(join(root, artifact.path), "utf8")).toBe("hello\n");
   });
@@ -145,6 +148,87 @@ describe("@scaflow/verification", () => {
         data: "bad",
       }),
     ).rejects.toThrow("outside the evidence directory");
+  });
+
+  it("zeroes incomplete incremental artifacts by identity when a streaming write is aborted", async () => {
+    const root = await temporaryDirectory("scaflow-evidence-");
+    const store = await VerificationArtifactStore.create(root);
+    const writer = await store.open({
+      id: "stream-abort",
+      path: "verification/stream-abort.txt",
+      mediaType: "text/plain",
+    });
+    await writer.write(Buffer.from("partial secret output"));
+    await writer.abort();
+    expect(await readFile(join(root, flatArtifactPath("verification/stream-abort.txt")), "utf8")).toBe("");
+
+    const completed = await store.open({
+      id: "stream-complete",
+      path: "verification/stream-complete.txt",
+      mediaType: "text/plain",
+    });
+    await completed.write(Buffer.from("complete output"));
+    await completed.complete();
+    await completed.abort();
+    expect(await readFile(join(root, flatArtifactPath("verification/stream-complete.txt")), "utf8"))
+      .toBe("complete output");
+  });
+
+  it("never writes through a logical artifact parent moved outside while its writer is open", async () => {
+    const root = await temporaryDirectory("scaflow-evidence-");
+    const outside = await temporaryDirectory("scaflow-outside-");
+    const active = join(root, "verification", "active");
+    await mkdir(active, { recursive: true });
+    const outsideSentinel = join(outside, "sentinel.txt");
+    await writeFile(outsideSentinel, "outside sentinel");
+    const store = await VerificationArtifactStore.create(root);
+    const writer = await store.open({ id: "abort-swap", path: "verification/active/output.txt",
+      mediaType: "text/plain" });
+
+    await rename(active, join(outside, "moved-parent"));
+    await writer.write(Buffer.from("incomplete secret"));
+    await writer.abort();
+
+    expect(await readFile(outsideSentinel, "utf8")).toBe("outside sentinel");
+    await expect(stat(join(outside, "moved-parent", "output.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(join(root, flatArtifactPath("verification/active/output.txt")), "utf8")).toBe("");
+  });
+
+  it("keeps completed artifacts contained when a logical parent moves outside during streaming", async () => {
+    const root = await temporaryDirectory("scaflow-evidence-");
+    const outside = await temporaryDirectory("scaflow-outside-");
+    const active = join(root, "verification", "active");
+    await mkdir(active, { recursive: true });
+    const store = await VerificationArtifactStore.create(root);
+    const writer = await store.open({ id: "complete-swap", path: "verification/active/output.txt",
+      mediaType: "text/plain" });
+
+    await rename(active, join(outside, "moved-parent"));
+    await writer.write(Buffer.from("complete output"));
+    const artifact = await writer.complete();
+
+    await expect(stat(join(outside, "moved-parent", "output.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(artifact.path).toBe(flatArtifactPath("verification/active/output.txt"));
+    expect(await readFile(join(root, artifact.path), "utf8")).toBe("complete output");
+  });
+
+  it("opens its safe flat sink even if the unused logical parent moves at the open seam", async () => {
+    const root = await temporaryDirectory("scaflow-evidence-");
+    const outside = await temporaryDirectory("scaflow-outside-");
+    const active = join(root, "verification", "active");
+    await mkdir(active, { recursive: true });
+    const store = await VerificationArtifactStore.create(root, { hooks: {
+      afterArtifactParentValidation() {
+        renameSync(active, join(outside, "moved-parent"));
+      },
+    } });
+
+    const writer = await store.open({ id: "open-swap", path: "verification/active/output.txt",
+      mediaType: "text/plain" });
+    await writer.write(Buffer.from("safe"));
+    const artifact = await writer.complete();
+    await expect(stat(join(outside, "moved-parent", "output.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(join(root, artifact.path), "utf8")).toBe("safe");
   });
 
   it("rejects a symlink before creating a missing descendant outside the evidence root", async () => {
@@ -204,4 +288,8 @@ async function temporaryDirectory(prefix: string): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), prefix));
   temporaryDirectories.push(directory);
   return directory;
+}
+
+function flatArtifactPath(requestedPath: string): string {
+  return `artifact-${createHash("sha256").update(requestedPath).digest("hex")}.data`;
 }
