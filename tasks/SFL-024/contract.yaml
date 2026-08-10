@@ -4,7 +4,7 @@ task:
   title: Command Verifier
   type: verification
   risk_level: R2
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Run Task Contract verification commands through the structured command runner and record command results.
 source_requirements:
