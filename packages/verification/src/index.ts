@@ -481,6 +481,15 @@ export {
 } from "./command.js";
 
 export {
+  COMMAND_VERIFIER_ID,
+  createCommandVerifier,
+  verifyTaskContractCommands,
+  type CommandExecutor,
+  type CommandVerificationResult,
+  type CommandVerifierOptions,
+} from "./command-verifier.js";
+
+export {
   SCOPE_VERIFIER_ID,
   createScopeVerifier,
   matchesPathPattern,

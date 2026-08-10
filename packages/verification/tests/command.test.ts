@@ -9,6 +9,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CommandRunner,
   VerificationArtifactStore,
+  createCommandVerifier,
+  runVerifiers,
+  verifyTaskContractCommands,
+  type CommandResult,
+  type StructuredCommand,
   type VerificationArtifactStoreHooks,
 } from "../src/index";
 
@@ -309,6 +314,216 @@ describe("Structured Command Runner", () => {
   });
 });
 
+describe("Task Contract Command Verifier", () => {
+  it("adapts and executes commands in contract order and records complete ordered evidence", async () => {
+    const fixture = await verifierFixture();
+    const commands = [
+      { repository: "@control", executable: "pnpm", args: ["test"],
+        timeout_seconds: 30, required: true },
+      { repository: "api", executable: "node", args: ["check.js", "two words"],
+        timeout_seconds: 45, required: false },
+    ] as const;
+    const seen: StructuredCommand[] = [];
+    const executor = {
+      async run(command: StructuredCommand) {
+        seen.push(command);
+        return commandResult(command, command.required
+          ? { cwd: "/runs/current/control", stdout: "ok", artifacts: [fixture.outputArtifact] }
+          : { cwd: "/runs/current/repositories/api", outcome: "failed", exitCode: 9,
+            stderr: "optional failure", stderrTruncated: true });
+      },
+    };
+
+    const result = await verifyTaskContractCommands(
+      { commands, executor, artifactStore: fixture.artifactStore },
+      { taskRunId: "run-1", evidence: [] },
+    );
+
+    expect(seen).toEqual([
+      { id: "verification-command-0001", repository: "@control", executable: "pnpm",
+        args: ["test"], timeoutSeconds: 30, required: true,
+        environment: { allowlist: ["PATH"] } },
+      { id: "verification-command-0002", repository: "api", executable: "node",
+        args: ["check.js", "two words"], timeoutSeconds: 45, required: false,
+        environment: { allowlist: ["PATH"] } },
+    ]);
+    expect(result).toMatchObject({ status: "passed", failures: [],
+      summary: expect.stringContaining("optional command failure") });
+    expect(result.commandResults.map(({ commandId }) => commandId)).toEqual([
+      "verification-command-0001", "verification-command-0002",
+    ]);
+    expect(result.artifacts).toEqual([fixture.outputArtifact, expect.objectContaining({
+      id: "commands-results", media_type: "application/json",
+    })]);
+    const manifest = JSON.parse(await fixture.artifact("commands/results.json"));
+    expect(manifest).toMatchObject({ version: 1, task_run_id: "run-1", verifier_id: "commands",
+      status: "passed", execution_error: null });
+    expect(manifest.command_results).toEqual(result.commandResults);
+    expect(manifest.command_results[1]).toMatchObject({
+      repository: "api", cwd: "/runs/current/repositories/api", executable: "node",
+      args: ["check.js", "two words"], required: false, timeoutSeconds: 45,
+      outcome: "failed", exitCode: 9, stderr: "optional failure", stderrTruncated: true,
+      artifacts: [],
+    });
+  });
+
+  it.each(["failed", "timed_out", "spawn_error", "rejected"] as const)(
+    "fails verification when a required command has outcome %s",
+    async (outcome) => {
+      const fixture = await verifierFixture();
+      const command = { repository: "@control", executable: "pnpm", args: ["test"],
+        timeout_seconds: 12, required: true } as const;
+      const executor = { run: async (structured: StructuredCommand) => commandResult(structured, {
+        outcome, exitCode: outcome === "failed" ? 2 : null,
+        timedOut: outcome === "timed_out", error: outcome === "succeeded" ? null : `${outcome} detail`,
+      }) };
+
+      const result = await verifyTaskContractCommands(
+        { commands: [command], executor, artifactStore: fixture.artifactStore },
+        { taskRunId: "run-1", evidence: [] },
+      );
+
+      expect(result).toMatchObject({ status: "failed", failures: [{
+        code: "REQUIRED_COMMAND_FAILED", category: "execution",
+        details: { outcome, timed_out: outcome === "timed_out" },
+      }] });
+      expect(result.commandResults[0]).toMatchObject({ outcome, timeoutSeconds: 12 });
+    },
+  );
+
+  it.each(["failed", "timed_out", "spawn_error", "rejected"] as const)(
+    "records optional outcome %s without failing verification",
+    async (outcome) => {
+      const fixture = await verifierFixture();
+      const command = { repository: "@control", executable: "pnpm", args: ["diagnose"],
+        timeout_seconds: 8, required: false } as const;
+      const result = await verifyTaskContractCommands({ commands: [command],
+        executor: { run: async (structured) => commandResult(structured, {
+          outcome, exitCode: outcome === "failed" ? 3 : null,
+          timedOut: outcome === "timed_out",
+        }) }, artifactStore: fixture.artifactStore }, { taskRunId: "run-1", evidence: [] });
+
+      expect(result).toMatchObject({ status: "passed", failures: [], commandResults: [{ outcome }],
+        summary: expect.stringContaining("optional command failure") });
+    },
+  );
+
+  it("accepts runner-redacted arguments without exposing their raw values", async () => {
+    const fixture = await verifierFixture();
+    const rawSecret = "token=super-secret";
+    const command = { repository: "@control", executable: "pnpm", args: ["test", rawSecret],
+      timeout_seconds: 12, required: true } as const;
+    const result = await verifyTaskContractCommands({ commands: [command],
+      executor: { run: async (structured) => commandResult(structured, {
+        args: ["test", "token=[REDACTED]"],
+      }) }, artifactStore: fixture.artifactStore }, { taskRunId: "run-1", evidence: [] });
+
+    expect(result).toMatchObject({ status: "passed", failures: [], commandResults: [{
+      args: ["test", "token=[REDACTED]"],
+    }] });
+    expect(JSON.stringify(result)).not.toContain(rawSecret);
+    const manifest = await fixture.artifact("commands/results.json");
+    expect(manifest).toContain("token=[REDACTED]");
+    expect(manifest).not.toContain(rawSecret);
+  });
+
+  it.each([
+    ["non-zero exit", { exitCode: 7 }, { exit_code: 7, timed_out: false }],
+    ["timed-out flag", { timedOut: true }, { exit_code: 0, timed_out: true }],
+  ] as const)("treats succeeded outcome with %s as a required command failure",
+    async (_name, contradictoryFields, expectedDetails) => {
+      const fixture = await verifierFixture();
+      const command = { repository: "@control", executable: "pnpm", args: ["test"],
+        timeout_seconds: 12, required: true } as const;
+      const result = await verifyTaskContractCommands({ commands: [command],
+        executor: { run: async (structured) => commandResult(structured, contradictoryFields) },
+        artifactStore: fixture.artifactStore }, { taskRunId: "run-1", evidence: [] });
+
+      expect(result).toMatchObject({ status: "failed", failures: [{
+        code: "REQUIRED_COMMAND_FAILED",
+        details: { outcome: "succeeded", ...expectedDetails },
+      }], commandResults: [{ outcome: "succeeded", ...contradictoryFields }] });
+    });
+
+  it.each([
+    ["non-zero exit", { exitCode: 7 }],
+    ["timed-out flag", { timedOut: true }],
+  ] as const)("records succeeded outcome with optional %s without failing verification",
+    async (_name, contradictoryFields) => {
+      const fixture = await verifierFixture();
+      const command = { repository: "@control", executable: "pnpm", args: ["diagnose"],
+        timeout_seconds: 12, required: false } as const;
+      const result = await verifyTaskContractCommands({ commands: [command],
+        executor: { run: async (structured) => commandResult(structured, contradictoryFields) },
+        artifactStore: fixture.artifactStore }, { taskRunId: "run-1", evidence: [] });
+
+      expect(result).toMatchObject({ status: "passed", failures: [],
+        summary: expect.stringContaining("optional command failure"),
+        commandResults: [{ outcome: "succeeded", ...contradictoryFields }] });
+    });
+
+  it("fails closed on a runner exception and persists only redacted diagnostic evidence", async () => {
+    const fixture = await verifierFixture();
+    const commands = [
+      { repository: "@control", executable: "pnpm", args: ["first"],
+        timeout_seconds: 10, required: false },
+      { repository: "@control", executable: "pnpm", args: ["second"],
+        timeout_seconds: 10, required: true },
+    ] as const;
+    let calls = 0;
+    const executor = { async run(command: StructuredCommand) {
+      calls += 1;
+      if (calls === 2) throw new Error("token=super-secret capture failure");
+      return commandResult(command);
+    } };
+
+    const result = await verifyTaskContractCommands(
+      { commands, executor, artifactStore: fixture.artifactStore },
+      { taskRunId: "run-1", evidence: [] },
+    );
+
+    expect(result).toMatchObject({ status: "failed", failures: [{
+      code: "COMMAND_EXECUTOR_ERROR", category: "infrastructure",
+      details: { command_id: "verification-command-0002", error: "token=[REDACTED] capture failure" },
+    }] });
+    expect(result.commandResults).toHaveLength(1);
+    const manifest = await fixture.artifact("commands/results.json");
+    expect(manifest).toContain("token=[REDACTED] capture failure");
+    expect(manifest).not.toContain("super-secret");
+  });
+
+  it("fails closed when an executor result contradicts requested command metadata", async () => {
+    const fixture = await verifierFixture();
+    const command = { repository: "@control", executable: "pnpm", args: ["test"],
+      timeout_seconds: 10, required: true } as const;
+
+    const result = await verifyTaskContractCommands({ commands: [command],
+      executor: { run: async (structured) => commandResult(structured, { required: false }) },
+      artifactStore: fixture.artifactStore }, { taskRunId: "run-1", evidence: [] });
+
+    expect(result).toMatchObject({ status: "failed", commandResults: [], failures: [{
+      code: "COMMAND_EXECUTOR_ERROR",
+      details: { error: expect.stringContaining("mismatched metadata") },
+    }] });
+  });
+
+  it("preserves the generic Verifier boundary while publishing command evidence", async () => {
+    const fixture = await verifierFixture();
+    const commands = [{ repository: "@control", executable: "pnpm", args: ["test"],
+      timeout_seconds: 10, required: true }] as const;
+    const verifier = createCommandVerifier({ commands,
+      executor: { run: async (command) => commandResult(command) },
+      artifactStore: fixture.artifactStore });
+
+    const result = await runVerifiers([verifier], { taskRunId: "run-1", evidence: [] });
+
+    expect(result).toMatchObject({ status: "passed", verifier_results: [{
+      verifier_id: "commands", status: "passed", failures: [],
+      artifacts: [expect.objectContaining({ id: "commands-results" })],
+    }] });
+  });
+});
+
 async function commandFixture(hostEnvironment: NodeJS.ProcessEnv = {}, outputLimitBytes = 16_384,
   terminationGraceMilliseconds = 25, artifactHooks?: VerificationArtifactStoreHooks) {
   const root = await mkdtemp(join(tmpdir(), "scaflow-command-"));
@@ -329,6 +544,45 @@ async function commandFixture(hostEnvironment: NodeJS.ProcessEnv = {}, outputLim
     root, control, developerRoot, evidenceRoot, runner: createRunner("@control", control, "run-1"),
     artifact: (path: string) => readFile(join(evidenceRoot, flatArtifactPath(path)), "utf8"),
     withMapping: async (repositoryId: string, cwd: string, taskRunId: string) => createRunner(repositoryId, cwd, taskRunId),
+  };
+}
+
+async function verifierFixture() {
+  const root = await mkdtemp(join(tmpdir(), "scaflow-command-verifier-"));
+  temporaryDirectories.push(root);
+  const evidenceRoot = join(root, "evidence");
+  const artifactStore = await VerificationArtifactStore.create(evidenceRoot);
+  const outputArtifact = await artifactStore.write({ id: "command-output", path: "fixture/output.txt",
+    mediaType: "text/plain", data: "output" });
+  return {
+    artifactStore,
+    outputArtifact,
+    artifact: (path: string) => readFile(join(evidenceRoot, flatArtifactPath(path)), "utf8"),
+  };
+}
+
+function commandResult(command: StructuredCommand,
+  overrides: Partial<CommandResult> = {}): CommandResult {
+  return {
+    commandId: command.id,
+    repository: command.repository,
+    cwd: "/runs/current/control",
+    executable: command.executable,
+    args: [...command.args],
+    required: command.required,
+    outcome: "succeeded",
+    exitCode: 0,
+    signal: null,
+    timedOut: false,
+    timeoutSeconds: command.timeoutSeconds,
+    stdout: "",
+    stderr: "",
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    artifacts: [],
+    error: null,
+    shellDecisionId: null,
+    ...overrides,
   };
 }
 
