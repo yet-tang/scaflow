@@ -158,12 +158,12 @@ describe("Structured Command Runner", () => {
       id: "timeout", repository: "@control", executable: process.execPath,
       args: ["-e", [
         "const {spawn}=require('node:child_process')",
-        "const child=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"],{stdio:'ignore'})",
-        "process.stdout.write(String(child.pid))",
         "process.on('SIGTERM',()=>{})",
+        "const child=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});process.stdout.write('READY');setInterval(()=>{},1000)\"],{stdio:['ignore','pipe','ignore']})",
+        "child.stdout.once('data',data=>{if(data.toString()!=='READY')process.exit(2);process.stdout.write(String(child.pid))})",
         "setInterval(()=>{},1000)",
       ].join(";")],
-      timeoutSeconds: 0.25, required: true,
+      timeoutSeconds: 2, required: true,
     });
     expect(result).toMatchObject({ outcome: "timed_out", timedOut: true, exitCode: null, signal: "SIGKILL" });
     const descendantPid = Number(result.stdout);
@@ -179,15 +179,15 @@ describe("Structured Command Runner", () => {
       args: ["-e", [
         "const {spawn}=require('node:child_process')",
         "process.on('SIGTERM',()=>process.exit(0))",
-        "const descendant=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"],{stdio:'ignore'})",
-        "process.stdout.write(String(descendant.pid))",
+        "const descendant=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});process.stdout.write('READY');setInterval(()=>{},1000)\"],{stdio:['ignore','pipe','ignore']})",
+        "descendant.stdout.once('data',data=>{if(data.toString()!=='READY')process.exit(2);process.stdout.write(String(descendant.pid))})",
         "setInterval(()=>{},1000)",
       ].join(";")],
-      timeoutSeconds: 0.75, required: true,
+      timeoutSeconds: 2, required: true,
     });
 
     expect(result).toMatchObject({ outcome: "timed_out", timedOut: true, exitCode: 0, signal: null });
-    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(825);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(2_075);
     await expectProcessGone(Number(result.stdout));
   });
 

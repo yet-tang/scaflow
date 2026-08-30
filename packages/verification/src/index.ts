@@ -498,3 +498,26 @@ export {
   type ScopeRepositoryObservation,
   type ScopeVerifierOptions,
 } from "./scope.js";
+
+export {
+  TEST_INTEGRITY_VERIFIER_ID,
+  createTestIntegrityVerifier,
+  verifyTestIntegrity,
+  type CoverageThresholdObservation,
+  type ConfigurationSourceObservation,
+  type FrozenValueObservation,
+  type SourceContent,
+  type SourceObservation,
+  type TestIntegrityEvidence,
+  type TestIntegrityVerifierOptions,
+} from "./test-integrity.js";
+
+export {
+  AGENT_RESULT_VERIFIER_ID,
+  createAgentResultVerifier,
+  verifyAgentResult,
+  type AgentResultVerifierOptions,
+  type EngineObservedChangedFiles,
+  type EngineObservedCommandResults,
+  type ObservedChangedFile,
+} from "./agent-result-verifier.js";
