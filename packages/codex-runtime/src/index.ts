@@ -16,6 +16,19 @@ export {
   type CodexExecSpawner,
   type CodexExecSpawnRequest,
 } from "./exec-adapter.js";
+export {
+  classifyRepairEligibility,
+  createFailureFingerprint,
+  createFailureSummary,
+  defaultRepairPolicy,
+  runRepairLoop,
+  validateRepairPolicy,
+  type RepairLoopOptions,
+  type RepairLoopReason,
+  type RepairLoopResult,
+  type RepairPolicy,
+  type RepairVerificationContext,
+} from "./repair-loop.js";
 
 export type AgentRuntimeEvent =
   | { readonly sequence: number; readonly type: "session_started"; readonly sessionId: string }
