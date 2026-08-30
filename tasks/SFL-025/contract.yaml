@@ -4,7 +4,7 @@ task:
   title: Test Integrity and Agent Result Verifiers
   type: verification
   risk_level: R3
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Verify MVP test integrity rules and validate Agent Result schema without trusting Agent self-reporting over Git diff or command results.
 source_requirements:
