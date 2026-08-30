@@ -4,7 +4,7 @@ task:
   title: Repair Loop
   type: runtime
   risk_level: R3
-  definition_state: ready
+  definition_state: completed
 objective:
   summary: Implement verification failure summaries, continue session behavior, repair limits, and blocked or failed state decisions.
 source_requirements:
